@@ -1,10 +1,31 @@
 import { rpc } from '@stellar/stellar-sdk';
 
+/**
+ * A Soroban contract event as consumed by the listener, normalized from the
+ * RPC's `getEvents` response shape (see {@link RpcEventSource.getEvents}).
+ */
 export interface RawContractEvent {
+  /**
+   * Unique event identifier assigned by the RPC. Also usable as a paging
+   * cursor: when a response carries no cursor of its own, the listener resumes
+   * from the last event's `id`.
+   */
   id: string;
+  /** `C…` contract address (StrKey) of the contract that emitted the event. */
   contractId: string;
+  /** Sequence number of the ledger in which the event was emitted. */
   ledger: number;
+  /**
+   * The event's topic segments in emission order (typically the event name
+   * first, e.g. `denylist_added`, followed by its parameters). Each entry is
+   * stringified from the RPC's ScVal form — consumers get plain strings, not
+   * XDR values.
+   */
   topic: string[];
+  /**
+   * The event's data payload, passed through from the RPC without
+   * normalization; its shape depends on the emitting contract.
+   */
   value: unknown;
 }
 
