@@ -142,4 +142,64 @@ describe('HorizonListener', () => {
 
     await expect(startPromise).resolves.toBeUndefined();
   });
+  it('logs through an injected logger on success, poll failure, and handler throw', async () => {
+    const okEvent = makeEvent({ id: 'evt-ok' });
+    const badEvent = makeEvent({ id: 'evt-bad' });
+    const handlerError = new Error('handler exploded');
+    const pollError = new Error('rpc unreachable');
+
+    const getEvents = jest
+      .fn()
+      .mockRejectedValueOnce(pollError)
+      .mockResolvedValueOnce({ events: [badEvent, okEvent], nextCursor: 'cursor-1' });
+
+    const eventSource: EventSource = { getEvents };
+    const logger = makeLogger();
+
+    const listener: HorizonListener = new HorizonListener({
+      eventSource,
+      onEvent: (event) => {
+        if (event.id === 'evt-bad') {
+          throw handlerError;
+        }
+        listener.stop();
+      },
+      logger,
+      sleep: async () => {},
+      backoffOptions: { jitter: false },
+    });
+
+    await listener.start();
+
+    // Poll failure: one warn naming the attempt count, carrying the error.
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining('poll failed (attempt 1/'),
+      pollError,
+    );
+
+    // Success: every received event is logged at info, including the one whose
+    // handler later throws (the info line precedes the handler call).
+    expect(logger.info).toHaveBeenCalledTimes(2);
+    expect(logger.info).toHaveBeenNthCalledWith(
+      1,
+      'horizon-listener: received contract event',
+      badEvent,
+    );
+    expect(logger.info).toHaveBeenNthCalledWith(
+      2,
+      'horizon-listener: received contract event',
+      okEvent,
+    );
+
+    // Handler throw: exactly one error, and processing continued to evt-ok.
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error).toHaveBeenCalledWith(
+      'horizon-listener: onEvent handler threw',
+      handlerError,
+    );
+
+    // Cursor advance is logged at debug with the new cursor.
+    expect(logger.debug).toHaveBeenCalledWith('horizon-listener: cursor advanced', 'cursor-1');
+  });
 });
