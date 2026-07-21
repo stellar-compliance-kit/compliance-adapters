@@ -61,4 +61,25 @@ describe('syncSanctionsToDenylist', () => {
     expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
     expect(result.written).toEqual([FLAGGED_ADDRESS]);
   });
+
+  it('deduplicates addresses before checking or writing denylist entries', async () => {
+    const provider = new MockSanctionsProvider();
+    const checkSpy = jest.spyOn(provider, 'checkAddress');
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS, FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+    });
+
+    expect(checkSpy).toHaveBeenCalledTimes(2);
+    expect(checkSpy).toHaveBeenNthCalledWith(1, FLAGGED_ADDRESS);
+    expect(checkSpy).toHaveBeenNthCalledWith(2, CLEAN_ADDRESS);
+    expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
+    expect(writer.addToDenylist).toHaveBeenCalledWith(FLAGGED_ADDRESS);
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toEqual([FLAGGED_ADDRESS]);
+    expect(result.written).toEqual([FLAGGED_ADDRESS]);
+  });
 });

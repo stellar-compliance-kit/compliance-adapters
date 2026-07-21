@@ -37,8 +37,9 @@ export interface SyncResult {
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
   const { provider, addresses, writer, dryRun = false } = options;
 
+  const uniqueAddresses = [...new Set(addresses)];
   const flagged: string[] = [];
-  for (const address of addresses) {
+  for (const address of uniqueAddresses) {
     const result = await provider.checkAddress(address);
     if (result.flagged) {
       flagged.push(address);
@@ -58,7 +59,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   }
 
   return {
-    checked: addresses.length,
+    checked: uniqueAddresses.length,
     flagged,
     written,
     dryRun,
