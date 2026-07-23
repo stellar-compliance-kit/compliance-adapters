@@ -35,6 +35,46 @@ package's tests with:
 npm test --workspace=sep10-auth
 ```
 
+## Which package does my change belong in?
+
+The three packages are split by **where in the compliance flow the code runs**, not by
+technology. Each is an independent workspace and none imports another — if a change seems
+to need code from a sibling, that is the signal to stop and open an issue rather than to
+add the dependency.
+
+| Package | Answers | Belongs here |
+|---|---|---|
+| **`sep10-auth`** | *Who is this?* | Establishing an authenticated Stellar address: building and verifying SEP-10 challenge transactions, and the Express middleware that resolves the signed-in address for downstream handlers. Anything wrapping `@stellar/stellar-sdk`'s `WebAuth` helpers. |
+| **`sanctions-oracle`** | *Should this address be blocked?* | Checking addresses against a watchlist and pushing the result on-chain: the `SanctionsProvider` interface and its implementations, and the sync path that writes flagged addresses into a `denylist-gate` contract. Anything that **writes** to a contract. |
+| **`horizon-listener`** | *What just happened on-chain?* | Consuming contract events off-chain: polling Soroban RPC, cursor and backoff handling, and re-emitting to a webhook. Anything that **reads** from a contract and fans out. |
+
+A rule of thumb is the direction of data flow: `sep10-auth` is request-time and touches no
+contract, `sanctions-oracle` writes **to** the chain, and `horizon-listener` reads **from**
+it.
+
+Two cases worth calling out:
+
+- **Authorization is not authentication.** Deciding whether an authenticated address is
+  *allowed* to do something is a compliance-primitives contract concern, not a
+  `sep10-auth` one. `sep10-auth`'s job ends once the address is proven.
+- **A new adapter is not a new package.** Supporting another watchlist data source means a
+  new `SanctionsProvider` implementation inside `sanctions-oracle`. Prefer a new
+  implementation of an existing interface over a new workspace.
+
+### When a new package is warranted
+
+Open an issue to discuss it first. A new workspace is usually only justified when the code
+integrates a **different external system**, on its own release cadence, that would
+otherwise force one of the three packages to take a dependency unrelated to its question
+above.
+
+Shared helpers needed by two packages are a better fit for a small internal package than
+for duplication — but raise that as an issue before building it, since it changes the "no
+package imports another" property described above.
+
+Whatever you add, keep contract code out of this repo: reference `compliance-primitives`
+as a dependency rather than vendoring it (see [Code style](#code-style)).
+
 ## Development workflow
 
 1. Fork the repo and create a branch off `main`.
