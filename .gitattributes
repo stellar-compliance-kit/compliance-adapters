@@ -1,0 +1,27 @@
+# Line-ending normalization.
+#
+# Everything Git detects as text is stored with LF in the repository and checked
+# out with LF, whatever the contributor's platform or core.autocrlf setting. This
+# keeps a Windows contributor from turning a one-line edit into a whole-file
+# CRLF diff, and matches the LF that Prettier and ESLint already assume.
+* text=auto eol=lf
+
+# The types this repository actually contains, declared explicitly so the result
+# never depends on Git's text/binary heuristic.
+*.ts   text eol=lf
+*.js   text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# Shell scripts must keep LF to stay executable on POSIX systems.
+*.sh text eol=lf
+
+# Common binaries, marked so they are never passed through normalization.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
