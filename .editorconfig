@@ -1,0 +1,18 @@
+# Editor defaults, so an editor without Prettier-on-save still produces the same
+# whitespace the repo already uses. Values mirror .prettierrc.json (tabWidth: 2)
+# and .gitattributes (LF), rather than introducing a second opinion.
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 2
+insert_final_newline = true
+trim_trailing_whitespace = true
+max_line_length = 100
+
+# Markdown: two trailing spaces are a hard line break, so trimming them would
+# silently change the rendered output.
+[*.md]
+trim_trailing_whitespace = false
