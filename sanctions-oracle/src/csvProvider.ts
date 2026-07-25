@@ -1,0 +1,50 @@
+/* =========================================================================
+ * WARNING: PLACEHOLDER MOCK DATA — DEVELOPMENT/TESTING ONLY
+ *
+ * This file is a placeholder mock for development and testing ONLY. It
+ * contains NO real sanctions data and must NEVER be used as a real
+ * compliance data source in production.
+ * ========================================================================= */
+
+import { SanctionsProvider } from './SanctionsProvider';
+import * as fs from 'fs';
+
+const CSV_SOURCE = 'csv-watchlist-v1';
+
+export class CsvSanctionsProvider implements SanctionsProvider {
+  private flaggedAddresses: Map<string, string> = new Map();
+
+  constructor(private csvPath: string) {
+    this.loadCsv();
+  }
+
+  private loadCsv(): void {
+    if (!fs.existsSync(this.csvPath)) {
+      throw new Error(`CSV file not found at path: ${this.csvPath}`);
+    }
+
+    const content = fs.readFileSync(this.csvPath, 'utf-8');
+    const lines = content.trim().split('\n');
+
+    // Skip header row
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+
+      const parts = line.split(',');
+      if (parts.length >= 1) {
+        const address = parts[0].trim();
+        const source = parts.length >= 2 ? parts[1].trim() : CSV_SOURCE;
+        this.flaggedAddresses.set(address, source);
+      }
+    }
+  }
+
+  async checkAddress(address: string): Promise<{ flagged: boolean; source: string }> {
+    const source = this.flaggedAddresses.get(address);
+    if (source) {
+      return { flagged: true, source };
+    }
+    return { flagged: false, source: CSV_SOURCE };
+  }
+}
