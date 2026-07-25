@@ -140,7 +140,7 @@ function parseArgs(argv: string[]): CliArgs {
   return args;
 }
 
-async function runCli(): Promise<void> {
+export async function runCli(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   if (!args.addressesPath) {

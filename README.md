@@ -56,8 +56,11 @@ logs what it would do):
 
 ```bash
 npm run build --workspace=sanctions-oracle
-node sanctions-oracle/dist/sync.js --dry-run --addresses ./sanctions-oracle/test/fixtures/addresses.json
+npx compliance-adapters sync-sanctions --dry-run --addresses ./sanctions-oracle/test/fixtures/addresses.json
 ```
+
+Run `npx compliance-adapters --help` for available commands and
+`npx compliance-adapters sync-sanctions --help` for command-specific options.
 
 See each package's README for its full API and configuration options.
 
