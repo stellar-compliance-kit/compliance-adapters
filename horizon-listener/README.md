@@ -32,7 +32,10 @@ const eventSource = new RpcEventSource({
   contractIds: [process.env.DENYLIST_GATE_CONTRACT_ID!, process.env.ALLOWLIST_TOKEN_CONTRACT_ID!],
 });
 
-const webhook = new HttpWebhookSender({ url: 'http://localhost:4000/webhook' });
+const webhook = new HttpWebhookSender({
+  url: 'http://localhost:4000/webhook',
+  signingSecret: process.env.WEBHOOK_SIGNING_SECRET,
+});
 
 const listener = new HorizonListener({
   eventSource,
@@ -63,6 +66,65 @@ app.post('/webhook', (req, res) => {
 });
 app.listen(4000);
 ```
+
+## Webhook signature verification
+
+When `HttpWebhookSender` is constructed with a `signingSecret`, every outbound
+request carries an `X-Signature` header of the form:
+
+```
+X-Signature: sha256=<hex-encoded HMAC-SHA256 of the raw request body, keyed by signingSecret>
+```
+
+The HMAC is computed over the exact JSON string sent as the request body
+(before any parsing), so a receiver must verify against the raw bytes, not a
+re-serialized version of the parsed body — re-serializing can change key
+order or whitespace and produce a different digest.
+
+A receiver should recompute the HMAC over the raw body with the shared
+secret and compare it to the header using a constant-time comparison (to
+avoid leaking the secret through timing differences), rejecting the request
+if they don't match or if the header is missing:
+
+```ts
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import express from 'express';
+
+const WEBHOOK_SIGNING_SECRET = process.env.WEBHOOK_SIGNING_SECRET!;
+
+const app = express();
+
+// Capture the raw body bytes for HMAC verification before JSON parsing.
+app.use(express.json({ verify: (req, _res, buf) => {
+  (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+} }));
+
+function isValidSignature(rawBody: Buffer, header: string | undefined): boolean {
+  if (!header) return false;
+
+  const expected = createHmac('sha256', WEBHOOK_SIGNING_SECRET).update(rawBody).digest('hex');
+  const expectedHeader = `sha256=${expected}`;
+
+  const a = Buffer.from(header);
+  const b = Buffer.from(expectedHeader);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+app.post('/webhook', (req, res) => {
+  const rawBody = (req as express.Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0);
+
+  if (!isValidSignature(rawBody, req.header('X-Signature'))) {
+    return res.sendStatus(401);
+  }
+
+  console.log('received event', req.body);
+  res.sendStatus(200);
+});
+app.listen(4000);
+```
+
+If `signingSecret` is omitted, `HttpWebhookSender` sends requests without an
+`X-Signature` header, exactly as before this feature was added.
 
 ## Reconnect / backoff behavior
 
