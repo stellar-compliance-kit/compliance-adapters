@@ -61,6 +61,12 @@ node sanctions-oracle/dist/sync.js --dry-run --addresses ./sanctions-oracle/test
 
 See each package's README for its full API and configuration options.
 
+### Troubleshooting the sync script (testnet)
+
+- **`txBadSeq` / sequence number errors** — your source account's cached sequence is stale; reload the account from Horizon/RPC before resubmitting.
+- **`txTooLate` / signature-expired failures** — usually local clock skew; sync your system clock (NTP) so the tx time bounds are valid.
+- **HTTP 429 / rate limiting** — public RPC endpoints throttle bursts; add backoff or use a dedicated RPC endpoint.
+
 ## Contributing
 
 Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and workflow details.
