@@ -64,6 +64,28 @@ app.post('/webhook', (req, res) => {
 app.listen(4000);
 ```
 
+## Polling mode vs stream mode
+
+`HorizonListener` supports two polling modes via the `mode` option:
+
+- **`poll`** (default) — fixed-interval polling. The listener always waits
+  `pollIntervalMs` between each `getEvents` call, regardless of whether events
+  were returned. Suitable for most use cases.
+
+- **`stream`** — backoff-only "stream-like" mode. The listener polls again
+  immediately after processing a full page of events, and only sleeps
+  `pollIntervalMs` when a poll returns no new events. This reduces latency for
+  high-activity contracts without hammering the RPC during quiet periods.
+
+```ts
+const listener = new HorizonListener({
+  eventSource,
+  onEvent: async (event) => { /* ... */ },
+  mode: 'stream',      // or 'poll' (default)
+  pollIntervalMs: 5000, // sleep duration during quiet periods
+});
+```
+
 ## Reconnect / backoff behavior
 
 If `eventSource.getEvents(...)` throws (RPC unreachable, rate-limited, cursor
