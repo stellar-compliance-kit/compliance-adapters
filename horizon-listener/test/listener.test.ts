@@ -97,6 +97,51 @@ describe('HorizonListener', () => {
     expect(logger.warn).toHaveBeenCalledTimes(2);
   });
 
+  it('asserts exact backoff delays across three consecutive failures', async () => {
+    // This test explicitly verifies that backoff timing matches computeBackoffDelayMs's
+    // exponential formula (baseMs * 2^attempt) for each attempt, ensuring contributors
+    // can verify timing without relying on wall-clock time or flaky timing tolerances.
+    const getEvents = jest.fn().mockRejectedValue(new Error('always down'));
+    const eventSource: EventSource = { getEvents };
+    const logger = makeLogger();
+    const sleepCalls: number[] = [];
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent: jest.fn(),
+      logger,
+      maxRetries: 4, // Allow 4 attempts, fail on 4th
+      backoffOptions: { jitter: false, baseMs: 100, maxMs: 10000 },
+      sleep: async (ms: number) => {
+        sleepCalls.push(ms);
+      },
+    });
+
+    const startPromise = listener.start();
+    startPromise.catch(() => {
+      // asserted below via rejects.toThrow; swallow here so Node doesn't warn
+      // about the rejection being "unhandled" while timers are advancing.
+    });
+
+    // Advance through each backoff delay; the listener will retry after each sleep
+    const firstDelay = computeBackoffDelayMs(1, { jitter: false, baseMs: 100, maxMs: 10000 });
+    const secondDelay = computeBackoffDelayMs(2, { jitter: false, baseMs: 100, maxMs: 10000 });
+    const thirdDelay = computeBackoffDelayMs(3, { jitter: false, baseMs: 100, maxMs: 10000 });
+
+    await jest.advanceTimersByTimeAsync(firstDelay);
+    await jest.advanceTimersByTimeAsync(secondDelay);
+    await jest.advanceTimersByTimeAsync(thirdDelay);
+
+    await expect(startPromise).rejects.toThrow(/giving up/);
+
+    // Verify getEvents was called 4 times (initial + 3 retries after backoff)
+    expect(getEvents).toHaveBeenCalledTimes(4);
+
+    // Verify sleep was called exactly 3 times with the correct delays
+    // (no sleep before first attempt, sleep between each failure)
+    expect(sleepCalls).toEqual([firstDelay, secondDelay, thirdDelay]);
+  });
+
   it('rejects once maxRetries consecutive failures are exceeded', async () => {
     const getEvents = jest.fn().mockRejectedValue(new Error('always down'));
     const eventSource: EventSource = { getEvents };
