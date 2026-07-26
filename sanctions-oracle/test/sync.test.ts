@@ -1,12 +1,35 @@
 import { syncSanctionsToDenylist, DenylistWriter } from '../src/sync';
+import { SanctionsProvider } from '../src/SanctionsProvider';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 
 const FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
 const CLEAN_ADDRESS = 'GDNOTPRESENTINANYMOCKWATCHLISTAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const instantSleep = async (): Promise<void> => {};
 
 function makeFakeWriter(): DenylistWriter & { addToDenylist: jest.Mock } {
   return {
     addToDenylist: jest.fn().mockResolvedValue({ hash: 'fakehash' }),
+  };
+}
+
+function makeFlakyProvider(failuresBeforeSuccess: number): SanctionsProvider {
+  let calls = 0;
+  return {
+    async checkAddress(address: string) {
+      calls += 1;
+      if (calls <= failuresBeforeSuccess) {
+        throw new Error(`transient failure ${calls}`);
+      }
+      return { flagged: address === FLAGGED_ADDRESS, source: 'flaky-provider' };
+    },
+  };
+}
+
+function makeAlwaysFailingProvider(): SanctionsProvider {
+  return {
+    async checkAddress(): Promise<{ flagged: boolean; source: string }> {
+      throw new Error('provider unavailable');
+    },
   };
 }
 
@@ -60,5 +83,55 @@ describe('syncSanctionsToDenylist', () => {
 
     expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
     expect(result.written).toEqual([FLAGGED_ADDRESS]);
+  });
+
+  it('retries a provider call that fails then succeeds, and still reflects the result correctly', async () => {
+    const provider = makeFlakyProvider(2);
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer,
+      dryRun: true,
+      retry: { maxAttempts: 3, sleepFn: instantSleep },
+    });
+
+    expect(result.flagged).toEqual([FLAGGED_ADDRESS]);
+    expect(result.failed).toEqual([]);
+  });
+
+  it('reports an address whose provider call exhausts all retries as failed, without crashing the sync', async () => {
+    const provider = makeAlwaysFailingProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: true,
+      retry: { maxAttempts: 2, sleepFn: instantSleep },
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toEqual([]);
+    expect(result.failed).toEqual([FLAGGED_ADDRESS, CLEAN_ADDRESS]);
+  });
+
+  it('does not write a failed address to the denylist', async () => {
+    const provider = makeAlwaysFailingProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer,
+      dryRun: false,
+      retry: { maxAttempts: 1, sleepFn: instantSleep },
+    });
+
+    expect(writer.addToDenylist).not.toHaveBeenCalled();
+    expect(result.written).toEqual([]);
+    expect(result.failed).toEqual([FLAGGED_ADDRESS]);
   });
 });

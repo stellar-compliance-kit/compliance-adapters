@@ -8,3 +8,4 @@ export {
   SyncResult,
   RpcDenylistWriterOptions,
 } from './sync';
+export { withRetry, RetryOptions } from './retry';
