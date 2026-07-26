@@ -61,6 +61,10 @@ node sanctions-oracle/dist/sync.js --dry-run --addresses ./sanctions-oracle/test
 
 See each package's README for its full API and configuration options.
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for release notes and version history.
+
 ## Contributing
 
 Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and workflow details.
