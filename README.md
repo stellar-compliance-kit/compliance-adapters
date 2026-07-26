@@ -51,6 +51,24 @@ npm test --workspace=sep10-auth
 npm run build
 ```
 
+### Working with a single package
+
+If you only need to work on one adapter:
+
+```bash
+# Install and test sep10-auth
+npm install --workspace=sep10-auth
+npm test --workspace=sep10-auth
+
+# Install and test sanctions-oracle
+npm install --workspace=sanctions-oracle
+npm test --workspace=sanctions-oracle
+
+# Install and test horizon-listener
+npm install --workspace=horizon-listener
+npm test --workspace=horizon-listener
+```
+
 To try the sanctions sync script against testnet in dry-run mode (no transactions submitted, just
 logs what it would do):
 
