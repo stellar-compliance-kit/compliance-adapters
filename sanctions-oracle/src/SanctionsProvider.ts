@@ -8,13 +8,60 @@
  * sync logic itself.
  *
  * @example
+ * Here's a realistic example of a REST-backed provider that queries an
+ * external sanctions API. This pattern can be used as a starting point for
+ * integrating your own watchlist data source:
+ *
  * ```ts
- * class MyProvider implements SanctionsProvider {
- *   async checkAddress(address: string) {
- *     const flagged = await myWatchlistApi.lookup(address);
- *     return { flagged: Boolean(flagged), source: 'my-watchlist-api' };
+ * import { SanctionsProvider } from 'sanctions-oracle';
+ *
+ * interface SanctionsApiResponse {
+ *   is_flagged: boolean;
+ *   risk_level?: string;
+ *   lists: string[];
+ * }
+ *
+ * export class RestSanctionsProvider implements SanctionsProvider {
+ *   constructor(
+ *     private apiBaseUrl: string,
+ *     private apiKey: string,
+ *   ) {}
+ *
+ *   async checkAddress(address: string): Promise<{ flagged: boolean; source: string }> {
+ *     try {
+ *       const response = await fetch(
+ *         `${this.apiBaseUrl}/check?address=${encodeURIComponent(address)}`,
+ *         {
+ *           headers: { Authorization: `Bearer ${this.apiKey}` },
+ *           timeout: 5000,
+ *         },
+ *       );
+ *
+ *       if (!response.ok) {
+ *         throw new Error(`API error: ${response.status}`);
+ *       }
+ *
+ *       const data = await response.json() as SanctionsApiResponse;
+ *
+ *       return {
+ *         flagged: data.is_flagged,
+ *         source: data.lists.join(',') || 'external-watchlist-api',
+ *       };
+ *     } catch (error) {
+ *       console.error(`Failed to check address ${address}:`, error);
+ *       // In production, you may want to fail closed (return flagged: true)
+ *       // or implement retry logic here.
+ *       throw error;
+ *     }
  *   }
  * }
+ *
+ * // Usage:
+ * // const provider = new RestSanctionsProvider(
+ * //   'https://api.watchlist-provider.com',
+ * //   process.env.WATCHLIST_API_KEY!,
+ * // );
+ * // await syncSanctionsToDenylist({ provider, ... });
  * ```
  */
 export interface SanctionsProvider {

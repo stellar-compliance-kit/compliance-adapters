@@ -42,7 +42,9 @@ export interface SanctionsProvider {
 }
 ```
 
-Implement this to plug in a real data source:
+Implement this to plug in a real data source. For a detailed, copy-pasteable example of a REST-backed provider, see the `SanctionsProvider` JSDoc `@example` block in [`src/SanctionsProvider.ts`](./src/SanctionsProvider.ts) — it includes error handling and can serve as a template for integrating your own watchlist API.
+
+A minimal implementation:
 
 ```ts
 import { SanctionsProvider } from 'sanctions-oracle';
