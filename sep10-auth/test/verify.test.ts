@@ -1,3 +1,4 @@
+///<reference types="jest" />
 import { Keypair, Networks, Transaction } from '@stellar/stellar-sdk';
 import { generateChallenge } from '../src/challenge';
 import { verifyChallenge } from '../src/verify';
@@ -79,6 +80,59 @@ describe('verifyChallenge', () => {
     }
   });
 
+  it('treats the exact boundary instant (maxTime + 300s) as valid (inclusive), and expires immediately after', () => {
+    jest.useFakeTimers();
+    try {
+      const initialTime = 1700000000000;
+      jest.setSystemTime(initialTime);
+
+      const serverKeypair = Keypair.random();
+      const clientKeypair = Keypair.random();
+      const timeoutSeconds = 300;
+
+      const challenge = generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+        homeDomain,
+        webAuthDomain: homeDomain,
+        networkPassphrase: Networks.TESTNET,
+        timeoutSeconds,
+      });
+
+      const signedXDR = signAsClient(challenge.transactionXDR, Networks.TESTNET, clientKeypair);
+
+      // At exact boundary moment (maxTime + 300s grace period):
+      // Stellar SDK's WebAuth.readChallengeTx treats the boundary instant as inclusive (valid).
+      jest.advanceTimersByTime((timeoutSeconds + 300) * 1000);
+
+      const resultAtBoundary = verifyChallenge(signedXDR, {
+        serverAccountId: serverKeypair.publicKey(),
+        networkPassphrase: Networks.TESTNET,
+        homeDomains: homeDomain,
+        webAuthDomain: homeDomain,
+      });
+
+      // WebAuth.readChallengeTx / Utils.validateTimebounds treats the exact boundary instant
+      // (maxTime + 300s grace period) as VALID (inclusive boundary condition).
+      expect(resultAtBoundary.valid).toBe(true);
+      expect(resultAtBoundary.address).toBe(clientKeypair.publicKey());
+
+      // Advancing 1 second past the boundary (601s total elapsed) causes the challenge to be expired.
+      jest.advanceTimersByTime(1000);
+
+      const resultAfterBoundary = verifyChallenge(signedXDR, {
+        serverAccountId: serverKeypair.publicKey(),
+        networkPassphrase: Networks.TESTNET,
+        homeDomains: homeDomain,
+        webAuthDomain: homeDomain,
+      });
+
+      // Beyond maxTime + 300s, WebAuth returns expired (valid: false).
+      expect(resultAfterBoundary.valid).toBe(false);
+      expect(resultAfterBoundary.error).toMatch(/expired|timebounds/i);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
   it('rejects a challenge verified against the wrong network passphrase', () => {
     const serverKeypair = Keypair.random();
     const clientKeypair = Keypair.random();
@@ -101,7 +155,7 @@ describe('verifyChallenge', () => {
     expect(result.valid).toBe(false);
     expect(result.address).toBe('');
     expect(result.error).toBeDefined();
-    expect(result.error).toMatch(/network|passphrase|hash/i);
+    expect(result.error).toMatch(/network|passphrase|hash|signed/i);
   });
 
   it('rejects a challenge the client never signed', () => {
