@@ -20,6 +20,24 @@ npm install
 (This package is part of the `compliance-adapters` npm workspace; run install
 from the repo root.)
 
+## Configuration
+
+Copy the root [`.env.example`](../.env.example) to `.env` at the repo root and
+fill in the `horizon-listener` variables before running the service:
+
+| Variable | Description |
+|---|---|
+| `STELLAR_RPC_URL` | Soroban RPC endpoint to poll for contract events |
+| `STELLAR_NETWORK_PASSPHRASE` | Must match the network the RPC endpoint serves |
+| `DENYLIST_GATE_CONTRACT_ID` | Deployed `denylist-gate` contract to subscribe to |
+| `ALLOWLIST_TOKEN_CONTRACT_ID` | Deployed `allowlist-token` contract to subscribe to |
+| `WEBHOOK_URL` | Endpoint that receives POSTed contract events |
+| `POLL_INTERVAL_MS` | Polling interval in milliseconds (default `5000`) |
+| `MAX_RETRIES` | Consecutive failures before the listener gives up (default `10`) |
+| `START_LEDGER` | Starting ledger for the very first cursor-less event query |
+
+See the comments in `.env.example` for allowed values and testnet guidance.
+
 ## Quick example
 
 ```ts

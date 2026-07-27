@@ -16,6 +16,21 @@ npm install
 (This package is part of the `compliance-adapters` npm workspace; run install
 from the repo root.)
 
+## Configuration
+
+Copy the root [`.env.example`](../.env.example) to `.env` at the repo root and
+fill in the `SEP10_*` variables before running the package locally:
+
+| Variable | Description |
+|---|---|
+| `SEP10_SERVER_SECRET` | Secret key of the server-side SEP-10 signing keypair |
+| `SEP10_SERVER_PUBLIC_KEY` | Corresponding public key (used as `serverAccountId`) |
+| `SEP10_HOME_DOMAIN` | Home domain embedded in challenge transactions |
+| `SEP10_WEB_AUTH_DOMAIN` | Web-auth domain (often the same as `SEP10_HOME_DOMAIN`) |
+| `SEP10_TIMEOUT_SECONDS` | Challenge lifetime in seconds (default `300`) |
+
+See the comments in `.env.example` for allowed values and testnet guidance.
+
 ## API
 
 ### `generateChallenge(clientAddress, serverKeypair, options?)`
