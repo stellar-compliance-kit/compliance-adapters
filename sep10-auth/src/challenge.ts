@@ -6,11 +6,32 @@ export interface GenerateChallengeOptions {
   networkPassphrase?: string;
   timeoutSeconds?: number;
   memo?: string | null;
+  /**
+   * The wallet's client domain, as supplied in the SEP-10 `client_domain`
+   * request parameter. When set, the challenge transaction includes an
+   * additional `client_domain` ManageData operation (sourced from
+   * {@link GenerateChallengeOptions.clientSigningKey}) that the wallet's
+   * client-domain server must co-sign alongside the client's own key.
+   * Requires {@link GenerateChallengeOptions.clientSigningKey} to also be set.
+   */
+  clientDomain?: string;
+  /**
+   * The `SIGNING_KEY` published on `<clientDomain>/.well-known/stellar.toml`.
+   * The caller is responsible for resolving this value; this package does not
+   * fetch stellar.toml itself. Required when {@link GenerateChallengeOptions.clientDomain} is set.
+   */
+  clientSigningKey?: string;
 }
 
+/**
+ * The result of {@link generateChallenge}.
+ */
 export interface GeneratedChallenge {
+  /** Base64-encoded XDR of the unsigned (server-signed only) challenge transaction, to be sent to the client for signing. */
   transactionXDR: string;
+  /** The network passphrase the challenge transaction was built for. Must be passed back into {@link verifyChallenge} unchanged. */
   networkPassphrase: string;
+  /** When the challenge stops being valid, derived from `timeoutSeconds`. A signed challenge submitted after this time will fail verification. */
   expiresAt: Date;
 }
 
@@ -37,6 +58,8 @@ export function generateChallenge(
     networkPassphrase,
     webAuthDomain,
     options.memo ?? null,
+    options.clientDomain ?? null,
+    options.clientSigningKey ?? null,
   );
 
   return {
