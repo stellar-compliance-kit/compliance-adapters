@@ -8,3 +8,15 @@ export {
   SyncResult,
   RpcDenylistWriterOptions,
 } from './sync';
+export {
+  ProviderRegistry,
+  ProviderRegistryAllProvidersFailedError,
+  ConflictResolutionPolicy,
+  ProviderErrorMode,
+  TieBreak,
+  ProviderRegistryOptions,
+  RegisterOptions,
+  ProviderCheckOutcome,
+  ProviderErrorOutcome,
+  RegistryCheckResult,
+} from './ProviderRegistry';
