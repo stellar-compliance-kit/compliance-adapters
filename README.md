@@ -49,7 +49,17 @@ npm test --workspace=sep10-auth
 
 # build all packages
 npm run build
+
+# build a single package
+npm run build --workspace=sep10-auth
 ```
+
+### Building
+
+The root-level `npm run build` script runs the TypeScript compiler across all three packages
+(`sep10-auth`, `sanctions-oracle`, and `horizon-listener`) using npm workspaces. Each package
+produces compiled output in its `dist/` directory. This is equivalent to running `tsc -p .` in
+each package independently.
 
 ### Working with a single package
 
