@@ -146,8 +146,44 @@ export function parseArgs(argv: string[]): CliArgs {
   return args;
 }
 
-async function runCli(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+function printHelp(): void {
+  console.log(`
+sanctions-oracle sync - Synchronize sanctions data to a Soroban denylist
+
+USAGE:
+  sanctions-oracle sync [OPTIONS]
+
+OPTIONS:
+  --addresses <path>          Path to JSON file containing array of addresses to check
+  --contract-id <id>          Soroban contract ID (required for live sync)
+  --rpc-url <url>             Soroban RPC endpoint URL (required for live sync)
+  --network-passphrase <str>  Network passphrase (required for live sync)
+  --secret-key <key>          Source account secret key (required for live sync)
+  --dry-run                   Preview output without writing to the contract
+  --help, -h                  Show this help message
+
+EXAMPLES:
+  # Dry-run mode: check addresses without writing
+  sanctions-oracle sync --addresses addresses.json --dry-run
+
+  # Live mode: sync flagged addresses to contract
+  sanctions-oracle sync \\
+    --addresses addresses.json \\
+    --contract-id CXXXX \\
+    --rpc-url https://soroban-testnet.stellar.org \\
+    --network-passphrase "Test SDF Network ; September 2015" \\
+    --secret-key SBXXXX
+  `);
+}
+
+export async function runCli(argv?: string[]): Promise<void> {
+  const processArgv = argv ?? process.argv.slice(2);
+  const args = parseArgs(processArgv);
+
+  if (args.help) {
+    printHelp();
+    return;
+  }
 
   if (!args.addressesPath) {
     console.error('Missing required flag: --addresses <path-to-json-array>');

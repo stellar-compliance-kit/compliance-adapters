@@ -1,4 +1,5 @@
-import { syncSanctionsToDenylist, DenylistWriter, parseArgs, CliArgs } from '../src/sync';
+import * as fs from 'fs';
+import { syncSanctionsToDenylist, DenylistWriter, parseArgs, CliArgs, runCli } from '../src/sync';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 
 const FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
@@ -123,5 +124,79 @@ describe('parseArgs', () => {
   it('defaults dryRun to false when not specified', () => {
     const result = parseArgs(['--addresses', '/path/to/addresses.json']);
     expect(result.dryRun).toBe(false);
+  });
+});
+
+describe('runCli', () => {
+  let originalExit: NodeJS.Process['exitCode'];
+  let originalConsoleError: typeof console.error;
+  let originalConsoleLog: typeof console.log;
+  let consoleLogs: string[] = [];
+  let consoleErrors: string[] = [];
+
+  beforeEach(() => {
+    originalExit = process.exitCode;
+    process.exitCode = undefined;
+    originalConsoleError = console.error;
+    originalConsoleLog = console.log;
+    consoleLogs = [];
+    consoleErrors = [];
+    console.error = jest.fn((msg) => {
+      consoleErrors.push(msg);
+    });
+    console.log = jest.fn((msg) => {
+      consoleLogs.push(msg);
+    });
+  });
+
+  afterEach(() => {
+    process.exitCode = originalExit;
+    console.error = originalConsoleError;
+    console.log = originalConsoleLog;
+  });
+
+  it('shows help when --help flag is passed', async () => {
+    await runCli(['--help']);
+    const output = consoleLogs.join('\n');
+    expect(output).toContain('sanctions-oracle sync');
+    expect(output).toContain('--addresses');
+    expect(output).toContain('--dry-run');
+    expect(output).toContain('--contract-id');
+  });
+
+  it('dry-run mode: runs without calling writer.addToDenylist', async () => {
+    const addressesFile = '/tmp/test-addresses.json';
+    const addresses = [Object.keys(MOCK_FLAGGED_ADDRESSES)[0], 'GCLEAN'];
+    fs.writeFileSync(addressesFile, JSON.stringify(addresses));
+
+    await runCli(['--addresses', addressesFile, '--dry-run']);
+
+    const output = consoleLogs.join('\n');
+    const result = JSON.parse(output);
+    expect(result.dryRun).toBe(true);
+    expect(result.flagged.length).toBeGreaterThan(0);
+    expect(result.written).toEqual([]);
+
+    fs.unlinkSync(addressesFile);
+  });
+
+  it('exits with code 1 when --addresses flag is missing', async () => {
+    await runCli(['--dry-run']);
+    expect(process.exitCode).toBe(1);
+    const output = consoleErrors.join('\n');
+    expect(output).toContain('Missing required flag: --addresses');
+  });
+
+  it('exits with code 1 when live sync is missing required flags', async () => {
+    const addressesFile = '/tmp/test-addresses.json';
+    fs.writeFileSync(addressesFile, JSON.stringify(['GTEST']));
+
+    await runCli(['--addresses', addressesFile]);
+
+    expect(process.exitCode).toBe(1);
+    const output = consoleErrors.join('\n');
+    expect(output).toContain('Missing required flags for a live sync');
+
+    fs.unlinkSync(addressesFile);
   });
 });
