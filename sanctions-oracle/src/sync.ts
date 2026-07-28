@@ -10,6 +10,62 @@ import {
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
 
+interface CacheEntry {
+  result: { flagged: boolean; source: string };
+  timestamp: number;
+}
+
+/**
+ * Optional cache layer for SanctionsProvider results.
+ * Avoids redundant provider calls for addresses checked recently.
+ */
+export class ProviderResultCache {
+  private cache: Map<string, CacheEntry> = new Map();
+  private readonly ttlMs: number;
+
+  /**
+   * Create a result cache with a specified time-to-live (TTL).
+   * @param ttlMs Time-to-live for cached results in milliseconds
+   */
+  constructor(ttlMs: number = 3600000) {
+    this.ttlMs = ttlMs;
+  }
+
+  /**
+   * Get a cached result if available and not expired.
+   * @returns The cached result, or undefined if not found or expired
+   */
+  get(address: string): { flagged: boolean; source: string } | undefined {
+    const entry = this.cache.get(address);
+    if (!entry) return undefined;
+
+    const now = Date.now();
+    if (now - entry.timestamp > this.ttlMs) {
+      this.cache.delete(address);
+      return undefined;
+    }
+
+    return entry.result;
+  }
+
+  /**
+   * Store a result in the cache.
+   */
+  set(address: string, result: { flagged: boolean; source: string }): void {
+    this.cache.set(address, {
+      result,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Clear all cached entries.
+   */
+  clear(): void {
+    this.cache.clear();
+  }
+}
+
 export interface DenylistWriter {
   addToDenylist(address: string): Promise<{ hash: string }>;
 }
@@ -25,6 +81,11 @@ export interface SyncOptions {
   addresses: string[];
   writer: DenylistWriter;
   dryRun?: boolean;
+  /**
+   * Optional cache to avoid redundant provider lookups for recently checked addresses.
+   * If provided, results are cached with a configurable TTL.
+   */
+  cache?: ProviderResultCache;
 }
 
 /**
@@ -42,11 +103,15 @@ export interface SyncResult {
 }
 
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
-  const { provider, addresses, writer, dryRun = false } = options;
+  const { provider, addresses, writer, dryRun = false, cache } = options;
 
   const flagged: string[] = [];
   for (const address of addresses) {
-    const result = await provider.checkAddress(address);
+    let result = cache?.get(address);
+    if (!result) {
+      result = await provider.checkAddress(address);
+      cache?.set(address, result);
+    }
     if (result.flagged) {
       flagged.push(address);
     }

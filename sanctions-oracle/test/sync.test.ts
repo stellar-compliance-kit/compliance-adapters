@@ -1,4 +1,4 @@
-import { syncSanctionsToDenylist, DenylistWriter } from '../src/sync';
+import { syncSanctionsToDenylist, DenylistWriter, ProviderResultCache } from '../src/sync';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 
 const FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
@@ -60,5 +60,64 @@ describe('syncSanctionsToDenylist', () => {
 
     expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
     expect(result.written).toEqual([FLAGGED_ADDRESS]);
+  });
+
+  it('uses cache to avoid redundant provider calls', async () => {
+    const provider = new MockSanctionsProvider();
+    const spy = jest.spyOn(provider, 'checkAddress');
+    const cache = new ProviderResultCache();
+    const writer = makeFakeWriter();
+
+    // First sync: provider is called
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      cache,
+    });
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockClear();
+
+    // Second sync: cache is used, provider not called
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      cache,
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('respects cache TTL', async () => {
+    const provider = new MockSanctionsProvider();
+    const spy = jest.spyOn(provider, 'checkAddress');
+    const cache = new ProviderResultCache(100); // 100ms TTL
+    const writer = makeFakeWriter();
+
+    // First sync
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer,
+      cache,
+    });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockClear();
+
+    // Wait for cache to expire
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // Second sync: cache expired, provider called again
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer,
+      cache,
+    });
+
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 });
