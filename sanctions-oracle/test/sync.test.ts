@@ -161,3 +161,77 @@ describe('diff-mode: only write newly-flagged addresses', () => {
     expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('CLI exit codes for partial vs total sync failure', () => {
+  it('returns sync result with failed writes tracked', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    let callCount = 0;
+    writer.addToDenylist = jest.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.resolve({ hash: 'success1' });
+      }
+      return Promise.reject(new Error('Write failed'));
+    });
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.flagged).toContain(FLAGGED_ADDRESS);
+    expect(result.written).toContain(FLAGGED_ADDRESS);
+  });
+
+  it('records partial failures when some addresses fail to write', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const firstFlaggedAddress = FLAGGED_ADDRESS;
+    const secondFlaggedAddress = Object.keys(MOCK_FLAGGED_ADDRESSES)[1];
+
+    let callCount = 0;
+    writer.addToDenylist = jest.fn().mockImplementation((addr) => {
+      callCount++;
+      if (addr === firstFlaggedAddress) {
+        return Promise.resolve({ hash: 'success' });
+      }
+      return Promise.reject(new Error('Second write failed'));
+    });
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [firstFlaggedAddress, secondFlaggedAddress],
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.written).toContain(firstFlaggedAddress);
+    expect(writer.addToDenylist).toHaveBeenCalledTimes(2);
+  });
+
+  it('distinguishes between total failure and partial success in results', async () => {
+    const provider = new MockSanctionsProvider();
+
+    const partialSuccessWriter = makeFakeWriter();
+    partialSuccessWriter.addToDenylist = jest.fn()
+      .mockResolvedValueOnce({ hash: 'hash1' })
+      .mockRejectedValueOnce(new Error('Failed'));
+
+    const totalFailureWriter = makeFakeWriter();
+    totalFailureWriter.addToDenylist = jest.fn().mockRejectedValue(new Error('Failed'));
+
+    const partialResult = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer: partialSuccessWriter,
+      dryRun: false,
+    });
+
+    expect(partialResult.written.length).toBeGreaterThan(0);
+  });
+});
