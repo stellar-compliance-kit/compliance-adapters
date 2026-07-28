@@ -45,4 +45,51 @@ describe('HttpWebhookSender', () => {
     expect(error.message).toContain(url);
     expect(error.message).toContain(String(status));
   });
+
+  it('respects timeoutMs option by passing AbortSignal to fetch', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const fetchImpl = jest.fn().mockImplementation((url, init) => {
+      capturedSignal = init.signal;
+      return Promise.resolve({ ok: true });
+    });
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      timeoutMs: 5000,
+    });
+
+    await sender.send(makeEvent());
+
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+  });
+
+  it('does not pass AbortSignal when timeoutMs is not set', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const fetchImpl = jest.fn().mockImplementation((url, init) => {
+      capturedSignal = init.signal;
+      return Promise.resolve({ ok: true });
+    });
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+    });
+
+    await sender.send(makeEvent());
+
+    expect(capturedSignal).toBeUndefined();
+  });
+
+  it('clears the timeout handle after successful send', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: true });
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      timeoutMs: 5000,
+    });
+
+    // Should complete without hanging
+    await expect(sender.send(makeEvent())).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
 });
