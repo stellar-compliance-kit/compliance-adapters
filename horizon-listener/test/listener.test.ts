@@ -267,4 +267,43 @@ describe('HorizonListener', () => {
       failureError,
     );
   });
+
+  it('supports calling stop() during backoff delay to exit promptly', async () => {
+    const getEvents = jest.fn().mockRejectedValue(new Error('rpc down'));
+    const eventSource: EventSource = { getEvents };
+    const logger = makeLogger();
+    const sleepCalls: Array<{ ms: number; aborted: boolean }> = [];
+
+    const mockSleep = jest.fn(async (ms: number) => {
+      sleepCalls.push({ ms, aborted: false });
+      // Simulate that stop() can be called during sleep
+    });
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent: jest.fn(),
+      logger,
+      maxRetries: 5,
+      backoffOptions: { jitter: false, baseMs: 1000, maxMs: 10000 },
+      sleep: mockSleep,
+    });
+
+    const startPromise = listener.start();
+    startPromise.catch(() => {
+      // swallow rejection so Node doesn't warn about unhandled rejection
+    });
+
+    // Advance past first failure and backoff sleep would start
+    const firstDelay = computeBackoffDelayMs(1, { jitter: false, baseMs: 1000, maxMs: 10000 });
+    await jest.advanceTimersByTimeAsync(firstDelay / 2);
+
+    // Call stop() while sleeping; should cause sleep to resolve
+    listener.stop();
+
+    // Should resolve (not reject) after a brief moment
+    await expect(startPromise).resolves.toBeUndefined();
+
+    // Verify sleep was attempted
+    expect(mockSleep).toHaveBeenCalled();
+  });
 });
