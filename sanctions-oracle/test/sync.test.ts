@@ -66,6 +66,7 @@ describe('syncSanctionsToDenylist', () => {
   it('deduplicates input addresses before checking', async () => {
     const provider = new MockSanctionsProvider();
     const writer = makeFakeWriter();
+    const checkSpy = jest.spyOn(provider, 'checkAddress');
 
     const result = await syncSanctionsToDenylist({
       provider,
@@ -74,7 +75,7 @@ describe('syncSanctionsToDenylist', () => {
       dryRun: false,
     });
 
-    expect(provider.checkAddress).toHaveBeenCalledTimes(2);
+    expect(checkSpy).toHaveBeenCalledTimes(2);
     expect(result.checked).toBe(2);
     expect(result.flagged).toEqual([FLAGGED_ADDRESS]);
     expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
@@ -171,8 +172,9 @@ describe('runCli', () => {
 
     await runCli(['--addresses', addressesFile, '--dry-run']);
 
-    const output = consoleLogs.join('\n');
-    const result = JSON.parse(output);
+    const jsonLog = consoleLogs.find((log) => log.startsWith('{'));
+    expect(jsonLog).toBeDefined();
+    const result = JSON.parse(jsonLog!);
     expect(result.dryRun).toBe(true);
     expect(result.flagged.length).toBeGreaterThan(0);
     expect(result.written).toEqual([]);
