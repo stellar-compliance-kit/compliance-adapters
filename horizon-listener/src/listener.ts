@@ -18,6 +18,7 @@ const consoleLogger: Logger = {
 export interface HorizonListenerOptions {
   eventSource: EventSource;
   onEvent: (event: RawContractEvent) => Promise<void> | void;
+  onEventFailure?: (event: RawContractEvent, error: unknown) => void | Promise<void>;
   pollIntervalMs?: number;
   maxRetries?: number;
   logger?: Logger;
@@ -35,6 +36,7 @@ const defaultSleep = (ms: number): Promise<void> =>
 export class HorizonListener {
   private readonly eventSource: EventSource;
   private readonly onEvent: (event: RawContractEvent) => Promise<void> | void;
+  private readonly onEventFailure?: (event: RawContractEvent, error: unknown) => void | Promise<void>;
   private readonly pollIntervalMs: number;
   private readonly maxRetries: number;
   private readonly logger: Logger;
@@ -48,6 +50,7 @@ export class HorizonListener {
   constructor(options: HorizonListenerOptions) {
     this.eventSource = options.eventSource;
     this.onEvent = options.onEvent;
+    this.onEventFailure = options.onEventFailure;
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
     this.maxRetries = options.maxRetries ?? 10;
     this.logger = options.logger ?? consoleLogger;
@@ -92,6 +95,13 @@ export class HorizonListener {
           await this.onEvent(event);
         } catch (err) {
           this.logger.error('horizon-listener: onEvent handler threw', err);
+          if (this.onEventFailure) {
+            try {
+              await this.onEventFailure(event, err);
+            } catch (failureErr) {
+              this.logger.error('horizon-listener: onEventFailure handler threw', failureErr);
+            }
+          }
         }
       }
 

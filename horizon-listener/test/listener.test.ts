@@ -187,4 +187,84 @@ describe('HorizonListener', () => {
 
     await expect(startPromise).resolves.toBeUndefined();
   });
+
+  it('calls onEventFailure when onEvent throws, providing the failed event and error', async () => {
+    const eventA = makeEvent({ id: 'evt-1' });
+    const eventB = makeEvent({ id: 'evt-2', topic: ['denylist_removed'] });
+
+    const getEvents = jest
+      .fn()
+      .mockResolvedValueOnce({ events: [eventA, eventB], nextCursor: 'cursor-1' });
+
+    const eventSource: EventSource = { getEvents };
+    const eventError = new Error('event processing failed');
+    const onEvent = jest
+      .fn()
+      .mockImplementationOnce(() => {
+        throw eventError;
+      })
+      .mockImplementationOnce(() => {
+        // second event succeeds
+      });
+
+    const onEventFailure = jest.fn();
+    const logger = makeLogger();
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      onEventFailure,
+      logger,
+      sleep: async () => {
+        listener.stop();
+      },
+    });
+
+    await listener.start();
+
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    expect(onEventFailure).toHaveBeenCalledTimes(1);
+    expect(onEventFailure).toHaveBeenCalledWith(eventA, eventError);
+    expect(onEvent).toHaveBeenNthCalledWith(1, eventA);
+    expect(onEvent).toHaveBeenNthCalledWith(2, eventB);
+  });
+
+  it('handles onEventFailure callback errors without interrupting the listener', async () => {
+    const eventA = makeEvent({ id: 'evt-1' });
+
+    const getEvents = jest
+      .fn()
+      .mockResolvedValueOnce({ events: [eventA], nextCursor: 'cursor-1' });
+
+    const eventSource: EventSource = { getEvents };
+    const eventError = new Error('event failed');
+    const failureError = new Error('failure handler failed');
+    const onEvent = jest.fn().mockImplementationOnce(() => {
+      throw eventError;
+    });
+
+    const onEventFailure = jest.fn().mockImplementationOnce(() => {
+      throw failureError;
+    });
+
+    const logger = makeLogger();
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      onEventFailure,
+      logger,
+      sleep: async () => {
+        listener.stop();
+      },
+    });
+
+    await listener.start();
+
+    expect(onEventFailure).toHaveBeenCalledWith(eventA, eventError);
+    expect(logger.error).toHaveBeenCalledWith(
+      'horizon-listener: onEventFailure handler threw',
+      failureError,
+    );
+  });
 });
