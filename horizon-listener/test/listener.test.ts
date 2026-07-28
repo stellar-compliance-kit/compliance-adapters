@@ -187,4 +187,42 @@ describe('HorizonListener', () => {
 
     await expect(startPromise).resolves.toBeUndefined();
   });
+
+  it('handles backpressure: processes multiple events in single poll batch', async () => {
+    // Test verifies listener processes all events from one poll before sleeping,
+    // ensuring efficient batching. This documents expected behavior when multiple
+    // events arrive in a single poll response.
+    const event1 = makeEvent({ id: 'event-1', ledger: 100 });
+    const event2 = makeEvent({ id: 'event-2', ledger: 101 });
+
+    const getEvents = jest
+      .fn()
+      .mockResolvedValueOnce({ events: [event1, event2], nextCursor: 'cursor-1' });
+
+    const eventSource: EventSource = { getEvents };
+    const received: RawContractEvent[] = [];
+
+    const onEvent = jest.fn(async (event: RawContractEvent) => {
+      received.push(event);
+      if (received.length === 2) {
+        listener.stop();
+      }
+    });
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      pollIntervalMs: 500,
+      sleep: async () => {},
+    });
+
+    await listener.start();
+
+    // Both events should be processed from single poll
+    expect(received).toHaveLength(2);
+    expect(received[0].id).toBe('event-1');
+    expect(received[1].id).toBe('event-2');
+    // Only one poll was made since listener was stopped after processing
+    expect(getEvents).toHaveBeenCalledTimes(1);
+  });
 });
