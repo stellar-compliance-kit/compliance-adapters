@@ -56,4 +56,16 @@ describe('computeBackoffDelayMs', () => {
       expect(delay).toBe(expected);
     }
   });
+
+  it('never exceeds maxMs at high attempt counts and does not overflow or produce NaN', () => {
+    const maxMs = 30000;
+    const testAttempts = [10, 20, 50, 100, 1000];
+
+    for (const attempt of testAttempts) {
+      const delay = computeBackoffDelayMs(attempt, { jitter: false, maxMs });
+      expect(delay).toBe(maxMs);
+      expect(Number.isNaN(delay)).toBe(false);
+      expect(Number.isFinite(delay)).toBe(true);
+    }
+  });
 });
