@@ -89,6 +89,9 @@ This is a reference pattern: it re-verifies the raw challenge transaction on
 every request. A production deployment would typically verify once and issue
 a short-lived session token instead — that's out of scope for this package.
 
+See [`examples/express-app`](./examples/express-app) for a small runnable
+Express app wiring together the full challenge/verify roundtrip.
+
 ## Scope
 
 This package only implements the SEP-10 building blocks (challenge

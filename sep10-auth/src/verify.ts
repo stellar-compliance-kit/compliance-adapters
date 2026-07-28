@@ -4,7 +4,7 @@ export interface VerifyChallengeOptions {
   serverAccountId: string;
   networkPassphrase?: string;
   homeDomains: string | string[];
-  webAuthDomain: string;
+  webAuthDomain: string | string[];
 }
 
 export interface VerifyResult {
@@ -18,31 +18,42 @@ export function verifyChallenge(
   options: VerifyChallengeOptions,
 ): VerifyResult {
   const networkPassphrase = options.networkPassphrase ?? Networks.TESTNET;
+  const webAuthDomains = Array.isArray(options.webAuthDomain)
+    ? options.webAuthDomain
+    : [options.webAuthDomain];
 
-  try {
-    const { clientAccountID } = WebAuth.readChallengeTx(
-      signedTransactionXDR,
-      options.serverAccountId,
-      networkPassphrase,
-      options.homeDomains,
-      options.webAuthDomain,
-    );
+  // The underlying SDK only matches against a single webAuthDomain per call,
+  // so try each candidate in turn and succeed on the first match.
+  let lastError: unknown;
 
-    WebAuth.verifyChallengeTxSigners(
-      signedTransactionXDR,
-      options.serverAccountId,
-      networkPassphrase,
-      [clientAccountID],
-      options.homeDomains,
-      options.webAuthDomain,
-    );
+  for (const webAuthDomain of webAuthDomains) {
+    try {
+      const { clientAccountID } = WebAuth.readChallengeTx(
+        signedTransactionXDR,
+        options.serverAccountId,
+        networkPassphrase,
+        options.homeDomains,
+        webAuthDomain,
+      );
 
-    return { valid: true, address: clientAccountID };
-  } catch (error) {
-    return {
-      valid: false,
-      address: '',
-      error: error instanceof Error ? error.message : String(error),
-    };
+      WebAuth.verifyChallengeTxSigners(
+        signedTransactionXDR,
+        options.serverAccountId,
+        networkPassphrase,
+        [clientAccountID],
+        options.homeDomains,
+        webAuthDomain,
+      );
+
+      return { valid: true, address: clientAccountID };
+    } catch (error) {
+      lastError = error;
+    }
   }
+
+  return {
+    valid: false,
+    address: '',
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+  };
 }
