@@ -61,6 +61,45 @@ Anything conforming to this interface — a REST client, a cache in front of
 multiple upstream lists, a local CSV loader — can be passed to
 `syncSanctionsToDenylist` in place of `MockSanctionsProvider`.
 
+## End-to-end example: custom provider with syncSanctionsToDenylist
+
+This example shows how to wire a custom `SanctionsProvider` with
+`syncSanctionsToDenylist` to check a list of addresses and submit them to
+a denylist contract:
+
+```ts
+import { syncSanctionsToDenylist, createRpcDenylistWriter, SanctionsProvider } from 'sanctions-oracle';
+import { Keypair } from '@stellar/stellar-sdk';
+
+// 1. Implement your custom SanctionsProvider
+// (For a realistic REST-backed example, see the @example block in src/SanctionsProvider.ts)
+class MyCustomProvider implements SanctionsProvider {
+  async checkAddress(address: string) {
+    // Your watchlist logic here
+    const flagged = await myWatchlistApi.lookup(address);
+    return { flagged: Boolean(flagged), source: 'my-watchlist-api' };
+  }
+}
+
+// 2. Create a writer that submits to your denylist contract
+const writer = createRpcDenylistWriter({
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  contractId: 'CABCDEF...',
+  sourceKeypair: Keypair.fromSecret(process.env.SECRET_KEY!),
+});
+
+// 3. Sync: check addresses and write flagged ones to denylist
+const result = await syncSanctionsToDenylist({
+  provider: new MyCustomProvider(),
+  addresses: ['GABC...', 'GDEF...'],
+  writer,
+  dryRun: false,
+});
+
+console.log(`Checked ${result.checked}, flagged ${result.flagged.length}, wrote ${result.written.length}`);
+```
+
 ## Running the sync script
 
 Once built (`npm run build`), the sync script is available as the
