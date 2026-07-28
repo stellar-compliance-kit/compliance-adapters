@@ -42,7 +42,7 @@ export function verifyChallenge(
     return {
       valid: false,
       address: '',
-      error: error instanceof Error ? error.message : String(error),
+      error: `sep10-auth: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }

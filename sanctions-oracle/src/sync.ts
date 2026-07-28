@@ -144,7 +144,7 @@ async function runCli(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   if (!args.addressesPath) {
-    console.error('Missing required flag: --addresses <path-to-json-array>');
+    console.error('sanctions-oracle: Missing required flag: --addresses <path-to-json-array>');
     process.exitCode = 1;
     return;
   }
@@ -171,7 +171,7 @@ async function runCli(): Promise<void> {
 
   if (!args.contractId || !args.rpcUrl || !args.networkPassphrase || !args.secretKey) {
     console.error(
-      'Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, --secret-key (or pass --dry-run).',
+      'sanctions-oracle: Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, --secret-key (or pass --dry-run).',
     );
     process.exitCode = 1;
     return;
@@ -190,7 +190,7 @@ async function runCli(): Promise<void> {
 
 if (require.main === module) {
   runCli().catch((err) => {
-    console.error(err);
+    console.error('sanctions-oracle:', err);
     process.exitCode = 1;
   });
 }

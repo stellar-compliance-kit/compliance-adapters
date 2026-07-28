@@ -57,6 +57,11 @@ export class HorizonListener {
 
   // Soroban RPC's getEvents is a polling/cursor API, not a persistent stream, so
   // "reconnecting" here just means: pause, then poll again with backoff.
+  /**
+   * Starts the event listener loop.
+   * @throws {Error} When max retries are exceeded for consecutive polling failures.
+   * This is an unrecoverable error that indicates the listener cannot continue.
+   */
   async start(): Promise<void> {
     this.running = true;
     this.attempt = 0;

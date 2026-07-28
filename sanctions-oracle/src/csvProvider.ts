@@ -19,24 +19,29 @@ export class CsvSanctionsProvider implements SanctionsProvider {
   }
 
   private loadCsv(): void {
-    if (!fs.existsSync(this.csvPath)) {
-      throw new Error(`CSV file not found at path: ${this.csvPath}`);
-    }
-
-    const content = fs.readFileSync(this.csvPath, 'utf-8');
-    const lines = content.trim().split('\n');
-
-    // Skip header row
-    for (let i = 1; i < lines.length; i++) {
-      const line = lines[i].trim();
-      if (!line) continue;
-
-      const parts = line.split(',');
-      if (parts.length >= 1) {
-        const address = parts[0].trim();
-        const source = parts.length >= 2 ? parts[1].trim() : CSV_SOURCE;
-        this.flaggedAddresses.set(address, source);
+    try {
+      if (!fs.existsSync(this.csvPath)) {
+        console.warn(`sanctions-oracle: CSV file not found at path: ${this.csvPath}, no addresses will be flagged`);
+        return;
       }
+
+      const content = fs.readFileSync(this.csvPath, 'utf-8');
+      const lines = content.trim().split('\n');
+
+      // Skip header row
+      for (let i = 1; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line) continue;
+
+        const parts = line.split(',');
+        if (parts.length >= 1) {
+          const address = parts[0].trim();
+          const source = parts.length >= 2 ? parts[1].trim() : CSV_SOURCE;
+          this.flaggedAddresses.set(address, source);
+        }
+      }
+    } catch (error) {
+      console.warn(`sanctions-oracle: Failed to load CSV from ${this.csvPath}: ${error instanceof Error ? error.message : String(error)}, no addresses will be flagged`);
     }
   }
 
