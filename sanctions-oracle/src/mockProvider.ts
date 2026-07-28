@@ -6,6 +6,7 @@
  * compliance data source in production.
  * ========================================================================= */
 
+import * as fs from 'fs';
 import { SanctionsProvider } from './SanctionsProvider';
 
 const MOCK_SOURCE = 'mock-watchlist-v1';
@@ -22,9 +23,67 @@ export const MOCK_FLAGGED_ADDRESSES: Record<string, string> = {
   GR7NI6P62MGG3W325DGDZVGPMM4I3LR5PE4GDAFPK276NZDKYAYQ5S37: MOCK_SOURCE,
 };
 
+export interface MockSanctionsProviderOptions {
+  /**
+   * Custom flagged addresses, either loaded from a JSON file or passed
+   * directly. If omitted, uses MOCK_FLAGGED_ADDRESSES.
+   * JSON file format: { "address": "source" } or ["address", "address", ...]
+   * If an array is provided, all addresses will use MOCK_SOURCE as the source.
+   */
+  flaggedAddresses?: Record<string, string> | string[] | string;
+}
+
 export class MockSanctionsProvider implements SanctionsProvider {
+  private flaggedAddresses: Record<string, string>;
+
+  constructor(options?: MockSanctionsProviderOptions) {
+    this.flaggedAddresses = this.loadFlaggedAddresses(options);
+  }
+
+  private loadFlaggedAddresses(options?: MockSanctionsProviderOptions): Record<string, string> {
+    if (!options?.flaggedAddresses) {
+      return MOCK_FLAGGED_ADDRESSES;
+    }
+
+    const flaggedAddresses = options.flaggedAddresses;
+
+    // Handle file path (string)
+    if (typeof flaggedAddresses === 'string') {
+      try {
+        const fileContent = fs.readFileSync(flaggedAddresses, 'utf8');
+        const parsed = JSON.parse(fileContent);
+        return this.normalizeAddresses(parsed);
+      } catch (error) {
+        throw new Error(`Failed to load flagged addresses from file ${flaggedAddresses}: ${error}`);
+      }
+    }
+
+    // Handle direct object or array
+    return this.normalizeAddresses(flaggedAddresses);
+  }
+
+  private normalizeAddresses(
+    data: Record<string, string> | string[],
+  ): Record<string, string> {
+    // If it's already an object with string values, use as-is
+    if (typeof data === 'object' && !Array.isArray(data)) {
+      return data as Record<string, string>;
+    }
+
+    // If it's an array, convert to object with MOCK_SOURCE as value
+    if (Array.isArray(data)) {
+      const result: Record<string, string> = {};
+      for (const address of data) {
+        result[address] = MOCK_SOURCE;
+      }
+      return result;
+    }
+
+    throw new Error('Flagged addresses must be an object or array');
+  }
+
   async checkAddress(address: string): Promise<{ flagged: boolean; source: string }> {
-    const source = MOCK_FLAGGED_ADDRESSES[address];
+    const source = this.flaggedAddresses[address];
     if (source) {
       return { flagged: true, source };
     }
