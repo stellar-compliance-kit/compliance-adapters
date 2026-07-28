@@ -98,3 +98,66 @@ describe('stdin address reading support', () => {
     expect(writer.addToDenylist).not.toHaveBeenCalled();
   });
 });
+
+describe('diff-mode: only write newly-flagged addresses', () => {
+  it('only writes addresses not already in the current denylist', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const currentDenylist = [FLAGGED_ADDRESS];
+    const allAddresses = [FLAGGED_ADDRESS, CLEAN_ADDRESS];
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: allAddresses,
+      writer,
+      dryRun: false,
+      currentDenylist,
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toEqual([FLAGGED_ADDRESS]);
+    expect(result.written).toEqual([]);
+    expect(writer.addToDenylist).not.toHaveBeenCalled();
+  });
+
+  it('writes flagged addresses not in the current denylist', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const secondFlaggedAddress = Object.keys(MOCK_FLAGGED_ADDRESSES)[1];
+    const currentDenylist = [FLAGGED_ADDRESS];
+    const allAddresses = [FLAGGED_ADDRESS, secondFlaggedAddress, CLEAN_ADDRESS];
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: allAddresses,
+      writer,
+      dryRun: false,
+      currentDenylist,
+    });
+
+    expect(result.checked).toBe(3);
+    expect(result.flagged).toContain(FLAGGED_ADDRESS);
+    expect(result.flagged).toContain(secondFlaggedAddress);
+    expect(result.written).toEqual([secondFlaggedAddress]);
+    expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
+    expect(writer.addToDenylist).toHaveBeenCalledWith(secondFlaggedAddress);
+  });
+
+  it('handles empty current denylist by writing all flagged addresses', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: false,
+      currentDenylist: [],
+    });
+
+    expect(result.written).toEqual([FLAGGED_ADDRESS]);
+    expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
+  });
+});
