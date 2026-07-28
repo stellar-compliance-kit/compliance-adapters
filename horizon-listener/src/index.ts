@@ -7,3 +7,4 @@ export {
 } from './eventSource';
 export { computeBackoffDelayMs, type BackoffOptions } from './backoff';
 export { HttpWebhookSender, type WebhookSender, type HttpWebhookSenderOptions } from './webhook';
+export { createWebhookForwarder, type WebhookForwarderOptions } from './factory';
