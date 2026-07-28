@@ -115,6 +115,13 @@ flagged address using `@stellar/stellar-sdk`'s `Contract`,
 
 ## Troubleshooting
 
+- **`addToDenylist should not be called in dry-run mode` error** — This
+  error occurs when the dry-run writer stub is used outside the intended
+  CLI path (e.g., when calling `syncSanctionsToDenylist` programmatically
+  with `dryRun: true` but accidentally providing a real writer). This is
+  a deliberate guard to prevent accidental contract modifications. Ensure
+  that when `dryRun: true`, you pass a stub writer (as the CLI does) that
+  never actually submits transactions.
 - **RPC url unreachable / request timeout** — verify `--rpc-url` is
   reachable from where you're running the script (e.g.
   `curl <rpc-url>`), and that you're not pointed at a local/private RPC
