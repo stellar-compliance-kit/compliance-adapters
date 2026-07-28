@@ -1,4 +1,4 @@
-import { syncSanctionsToDenylist, DenylistWriter, ProviderResultCache } from '../src/sync';
+import { syncSanctionsToDenylist, DenylistWriter, ProviderResultCache, AuditLogEntry } from '../src/sync';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 
 const FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
@@ -119,5 +119,67 @@ describe('syncSanctionsToDenylist', () => {
     });
 
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Audit logging', () => {
+  it('audit logger receives entries with correct fields', async () => {
+    const provider = new MockSanctionsProvider();
+    const auditLogs: AuditLogEntry[] = [];
+    const writer: DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> } = {
+      addToDenylist: jest.fn().mockResolvedValue({ hash: 'fakehash' }),
+      addToDenylistWithSource: jest.fn(async (address: string, source: string) => {
+        const entry: AuditLogEntry = {
+          address,
+          timestamp: new Date().toISOString(),
+          source,
+          txHash: 'fakehash',
+        };
+        auditLogs.push(entry);
+        return { hash: 'fakehash', auditLog: entry };
+      }),
+    };
+
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: false,
+    });
+
+    expect(auditLogs).toHaveLength(1);
+    const entry = auditLogs[0];
+    expect(entry.address).toBe(FLAGGED_ADDRESS);
+    expect(entry.source).toMatch(/mock-watchlist/);
+    expect(entry.txHash).toBe('fakehash');
+    expect(new Date(entry.timestamp)).toBeInstanceOf(Date);
+  });
+
+  it('audit logging is skipped in dry-run mode', async () => {
+    const provider = new MockSanctionsProvider();
+    const auditLogs: AuditLogEntry[] = [];
+    const writer: DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> } = {
+      addToDenylist: jest.fn().mockResolvedValue({ hash: 'fakehash' }),
+      addToDenylistWithSource: jest.fn(async (address: string, source: string) => {
+        const entry: AuditLogEntry = {
+          address,
+          timestamp: new Date().toISOString(),
+          source,
+          txHash: 'fakehash',
+        };
+        auditLogs.push(entry);
+        return { hash: 'fakehash', auditLog: entry };
+      }),
+    };
+
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer,
+      dryRun: true,
+    });
+
+    expect(auditLogs).toHaveLength(0);
+    expect(writer.addToDenylistWithSource).not.toHaveBeenCalled();
   });
 });

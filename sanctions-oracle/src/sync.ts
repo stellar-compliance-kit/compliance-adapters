@@ -66,6 +66,19 @@ export class ProviderResultCache {
   }
 }
 
+export interface AuditLogEntry {
+  /** The address added to the denylist. */
+  address: string;
+  /** Timestamp when the write occurred (ISO 8601 string). */
+  timestamp: string;
+  /** The source watchlist that flagged the address. */
+  source: string;
+  /** The transaction hash resulting from the write. */
+  txHash: string;
+}
+
+export type AuditLogger = (entry: AuditLogEntry) => void | Promise<void>;
+
 export interface DenylistWriter {
   addToDenylist(address: string): Promise<{ hash: string }>;
 }
@@ -102,10 +115,16 @@ export interface SyncResult {
   dryRun: boolean;
 }
 
+interface FlaggedAddressWithSource {
+  address: string;
+  source: string;
+}
+
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
   const { provider, addresses, writer, dryRun = false, cache } = options;
 
   const flagged: string[] = [];
+  const flaggedWithSource: FlaggedAddressWithSource[] = [];
   for (const address of addresses) {
     let result = cache?.get(address);
     if (!result) {
@@ -114,17 +133,25 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     }
     if (result.flagged) {
       flagged.push(address);
+      flaggedWithSource.push({ address, source: result.source });
     }
   }
 
   const written: string[] = [];
   if (dryRun) {
-    for (const address of flagged) {
+    for (const { address } of flaggedWithSource) {
       console.log(`[dry-run] would call add_to_denylist(${address})`);
     }
   } else {
-    for (const address of flagged) {
-      await writer.addToDenylist(address);
+    for (const { address, source } of flaggedWithSource) {
+      // Call writer with extended interface if available
+      const writerExt = writer as DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> };
+      let result: { hash: string; auditLog?: AuditLogEntry };
+      if (writerExt.addToDenylistWithSource) {
+        result = await writerExt.addToDenylistWithSource(address, source);
+      } else {
+        result = await writer.addToDenylist(address);
+      }
       written.push(address);
     }
   }
@@ -142,13 +169,18 @@ export interface RpcDenylistWriterOptions {
   networkPassphrase: string;
   contractId: string;
   sourceKeypair: Keypair;
+  /**
+   * Optional audit logger to record each denylist write for compliance purposes.
+   * Called with address, timestamp, source, and resulting transaction hash.
+   */
+  auditLogger?: AuditLogger;
 }
 
 // Kept behind the DenylistWriter interface (rather than called directly
 // from syncSanctionsToDenylist) so tests can inject a fake writer instead
 // of touching a live RPC endpoint.
-export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): DenylistWriter {
-  const { rpcUrl, networkPassphrase, contractId, sourceKeypair } = options;
+export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> } {
+  const { rpcUrl, networkPassphrase, contractId, sourceKeypair, auditLogger } = options;
   const server = new rpc.Server(rpcUrl);
   const contract = new Contract(contractId);
 
@@ -169,6 +201,35 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
 
       const sendResult = await server.sendTransaction(prepared);
       return { hash: sendResult.hash };
+    },
+    async addToDenylistWithSource(address: string, source: string): Promise<{ hash: string; auditLog?: AuditLogEntry }> {
+      const account = await server.getAccount(sourceKeypair.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase,
+      })
+        .addOperation(contract.call('add_to_denylist', nativeToScVal(address, { type: 'address' })))
+        .setTimeout(30)
+        .build();
+
+      const prepared = await server.prepareTransaction(tx);
+      prepared.sign(sourceKeypair);
+
+      const sendResult = await server.sendTransaction(prepared);
+
+      const auditEntry: AuditLogEntry = {
+        address,
+        timestamp: new Date().toISOString(),
+        source,
+        txHash: sendResult.hash,
+      };
+
+      if (auditLogger) {
+        await auditLogger(auditEntry);
+      }
+
+      return { hash: sendResult.hash, auditLog: auditEntry };
     },
   };
 }

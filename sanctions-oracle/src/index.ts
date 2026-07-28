@@ -5,6 +5,8 @@ export {
   createRpcDenylistWriter,
   ProviderResultCache,
   DenylistWriter,
+  AuditLogEntry,
+  AuditLogger,
   SyncOptions,
   SyncResult,
   RpcDenylistWriterOptions,
