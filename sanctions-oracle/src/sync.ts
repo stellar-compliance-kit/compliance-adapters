@@ -27,10 +27,17 @@ export interface SyncOptions {
   dryRun?: boolean;
 }
 
+/**
+ * Result of a sanctions sync operation.
+ */
 export interface SyncResult {
+  /** Total number of candidate addresses checked against the provider. */
   checked: number;
+  /** Addresses flagged by the sanctions provider. */
   flagged: string[];
+  /** Addresses successfully written to the denylist (empty if dryRun is true). */
   written: string[];
+  /** Whether this was a dry-run (read-only) operation. */
   dryRun: boolean;
 }
 
