@@ -61,4 +61,21 @@ describe('syncSanctionsToDenylist', () => {
     expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
     expect(result.written).toEqual([FLAGGED_ADDRESS]);
   });
+
+  it('deduplicates input addresses before checking', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, FLAGGED_ADDRESS, CLEAN_ADDRESS, FLAGGED_ADDRESS],
+      writer,
+      dryRun: false,
+    });
+
+    expect(provider.checkAddress).toHaveBeenCalledTimes(2);
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toEqual([FLAGGED_ADDRESS]);
+    expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
+  });
 });
