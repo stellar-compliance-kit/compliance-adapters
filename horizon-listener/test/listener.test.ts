@@ -272,12 +272,6 @@ describe('HorizonListener', () => {
     const getEvents = jest.fn().mockRejectedValue(new Error('rpc down'));
     const eventSource: EventSource = { getEvents };
     const logger = makeLogger();
-    const sleepCalls: Array<{ ms: number; aborted: boolean }> = [];
-
-    const mockSleep = jest.fn(async (ms: number) => {
-      sleepCalls.push({ ms, aborted: false });
-      // Simulate that stop() can be called during sleep
-    });
 
     const listener = new HorizonListener({
       eventSource,
@@ -285,7 +279,6 @@ describe('HorizonListener', () => {
       logger,
       maxRetries: 5,
       backoffOptions: { jitter: false, baseMs: 1000, maxMs: 10000 },
-      sleep: mockSleep,
     });
 
     const startPromise = listener.start();
@@ -293,17 +286,38 @@ describe('HorizonListener', () => {
       // swallow rejection so Node doesn't warn about unhandled rejection
     });
 
-    // Advance past first failure and backoff sleep would start
-    const firstDelay = computeBackoffDelayMs(1, { jitter: false, baseMs: 1000, maxMs: 10000 });
-    await jest.advanceTimersByTimeAsync(firstDelay / 2);
+    // Advance to trigger first failure and backoff
+    await jest.advanceTimersByTimeAsync(0);
 
-    // Call stop() while sleeping; should cause sleep to resolve
+    // Call stop() while sleeping; should exit the loop
     listener.stop();
 
     // Should resolve (not reject) after a brief moment
     await expect(startPromise).resolves.toBeUndefined();
+  });
 
-    // Verify sleep was attempted
-    expect(mockSleep).toHaveBeenCalled();
+  it('interrupts poll interval sleep when stop() is called', async () => {
+    const eventA = makeEvent({ id: 'evt-1' });
+    const getEvents = jest.fn().mockResolvedValue({ events: [eventA], nextCursor: 'cursor-1' });
+    const eventSource: EventSource = { getEvents };
+    const onEvent = jest.fn();
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      pollIntervalMs: 10000,
+    });
+
+    const startPromise = listener.start();
+
+    // Let the first poll complete
+    await jest.advanceTimersByTimeAsync(0);
+
+    // Listener is now sleeping for pollIntervalMs (10000ms)
+    // Call stop() during the sleep
+    listener.stop();
+
+    // Should resolve immediately without waiting the full poll interval
+    await expect(startPromise).resolves.toBeUndefined();
   });
 });

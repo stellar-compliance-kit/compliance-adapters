@@ -24,14 +24,24 @@ export interface HorizonListenerOptions {
   logger?: Logger;
   // Injectable so tests can drive time with Jest fake timers instead of waiting
   // on the real wall clock.
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   // Injectable so tests can force deterministic (or jitter-free) backoff delays
   // instead of depending on Math.random.
   backoffOptions?: BackoffOptions;
 }
 
-const defaultSleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error('Sleep aborted'));
+      return;
+    }
+    const timeoutId = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timeoutId);
+      reject(signal.reason ?? new Error('Sleep aborted'));
+    }, { once: true });
+  });
 
 export class HorizonListener {
   private readonly eventSource: EventSource;
@@ -40,12 +50,13 @@ export class HorizonListener {
   private readonly pollIntervalMs: number;
   private readonly maxRetries: number;
   private readonly logger: Logger;
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly backoffOptions: BackoffOptions;
 
   private cursor: string | undefined;
   private running = false;
   private attempt = 0;
+  private sleepAbortController: AbortController | undefined;
 
   constructor(options: HorizonListenerOptions) {
     this.eventSource = options.eventSource;
@@ -83,7 +94,17 @@ export class HorizonListener {
         }
 
         const delayMs = computeBackoffDelayMs(this.attempt, this.backoffOptions);
-        await this.sleep(delayMs);
+        this.sleepAbortController = new AbortController();
+        try {
+          await this.sleep(delayMs, this.sleepAbortController.signal);
+        } catch (sleepErr) {
+          if (this.sleepAbortController.signal.aborted) {
+            break;
+          }
+          throw sleepErr;
+        } finally {
+          this.sleepAbortController = undefined;
+        }
         continue;
       }
 
@@ -112,11 +133,22 @@ export class HorizonListener {
         break;
       }
 
-      await this.sleep(this.pollIntervalMs);
+      this.sleepAbortController = new AbortController();
+      try {
+        await this.sleep(this.pollIntervalMs, this.sleepAbortController.signal);
+      } catch (sleepErr) {
+        if (this.sleepAbortController.signal.aborted) {
+          break;
+        }
+        throw sleepErr;
+      } finally {
+        this.sleepAbortController = undefined;
+      }
     }
   }
 
   stop(): void {
     this.running = false;
+    this.sleepAbortController?.abort();
   }
 }
