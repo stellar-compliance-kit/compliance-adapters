@@ -1,5 +1,5 @@
 import { Keypair, Networks, Transaction } from '@stellar/stellar-sdk';
-import { generateChallenge } from '../src/challenge';
+import { generateChallenge, InvalidClientAddressError } from '../src/challenge';
 
 describe('generateChallenge', () => {
   const homeDomain = 'localhost:3000';
@@ -35,5 +35,14 @@ describe('generateChallenge', () => {
 
     expect(challenge.networkPassphrase).toBe(Networks.TESTNET);
     expect(challenge.transactionXDR.length).toBeGreaterThan(0);
+  });
+
+  it('throws InvalidClientAddressError when clientAddress is not a valid Stellar Ed25519 public key', () => {
+    const serverKeypair = Keypair.random();
+    const invalidAddress = 'invalid-address';
+
+    expect(() => generateChallenge(invalidAddress, serverKeypair)).toThrow(
+      InvalidClientAddressError,
+    );
   });
 });

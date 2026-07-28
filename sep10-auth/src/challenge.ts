@@ -1,4 +1,11 @@
-import { Keypair, Networks, WebAuth } from '@stellar/stellar-sdk';
+import { Keypair, Networks, StrKey, WebAuth } from '@stellar/stellar-sdk';
+
+export class InvalidClientAddressError extends Error {
+  constructor(address: string) {
+    super(`Invalid client address: ${address}`);
+    this.name = 'InvalidClientAddressError';
+  }
+}
 
 export interface GenerateChallengeOptions {
   homeDomain?: string;
@@ -24,6 +31,10 @@ export function generateChallenge(
   serverKeypair: Keypair,
   options: GenerateChallengeOptions = {},
 ): GeneratedChallenge {
+  if (!StrKey.isValidEd25519PublicKey(clientAddress)) {
+    throw new InvalidClientAddressError(clientAddress);
+  }
+
   const homeDomain = options.homeDomain ?? DEFAULT_HOME_DOMAIN;
   const webAuthDomain = options.webAuthDomain ?? homeDomain;
   const networkPassphrase = options.networkPassphrase ?? Networks.TESTNET;
