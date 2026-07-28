@@ -102,16 +102,17 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
   };
 }
 
-interface CliArgs {
+export interface CliArgs {
   addressesPath?: string;
   dryRun: boolean;
   contractId?: string;
   rpcUrl?: string;
   networkPassphrase?: string;
   secretKey?: string;
+  help?: boolean;
 }
 
-function parseArgs(argv: string[]): CliArgs {
+export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { dryRun: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -133,6 +134,10 @@ function parseArgs(argv: string[]): CliArgs {
         break;
       case '--secret-key':
         args.secretKey = argv[++i];
+        break;
+      case '--help':
+      case '-h':
+        args.help = true;
         break;
       default:
         break;

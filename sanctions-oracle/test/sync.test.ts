@@ -1,4 +1,4 @@
-import { syncSanctionsToDenylist, DenylistWriter } from '../src/sync';
+import { syncSanctionsToDenylist, DenylistWriter, parseArgs, CliArgs } from '../src/sync';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 
 const FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
@@ -77,5 +77,51 @@ describe('syncSanctionsToDenylist', () => {
     expect(result.checked).toBe(2);
     expect(result.flagged).toEqual([FLAGGED_ADDRESS]);
     expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('parseArgs', () => {
+  it('parses all recognized flags', () => {
+    const result = parseArgs([
+      '--addresses', '/path/to/addresses.json',
+      '--dry-run',
+      '--contract-id', 'CBSXYZ',
+      '--rpc-url', 'https://soroban-testnet.stellar.org',
+      '--network-passphrase', 'Test SDF Network ; September 2015',
+      '--secret-key', 'SBXXXXXXXX',
+    ]);
+
+    expect(result.addressesPath).toBe('/path/to/addresses.json');
+    expect(result.dryRun).toBe(true);
+    expect(result.contractId).toBe('CBSXYZ');
+    expect(result.rpcUrl).toBe('https://soroban-testnet.stellar.org');
+    expect(result.networkPassphrase).toBe('Test SDF Network ; September 2015');
+    expect(result.secretKey).toBe('SBXXXXXXXX');
+  });
+
+  it('handles --help flag', () => {
+    const result = parseArgs(['--help']);
+    expect(result.help).toBe(true);
+  });
+
+  it('handles -h flag as alias for --help', () => {
+    const result = parseArgs(['-h']);
+    expect(result.help).toBe(true);
+  });
+
+  it('ignores unknown flags', () => {
+    const result = parseArgs([
+      '--addresses', '/path/to/addresses.json',
+      '--unknown-flag', 'value',
+      '--dry-run',
+    ]);
+
+    expect(result.addressesPath).toBe('/path/to/addresses.json');
+    expect(result.dryRun).toBe(true);
+  });
+
+  it('defaults dryRun to false when not specified', () => {
+    const result = parseArgs(['--addresses', '/path/to/addresses.json']);
+    expect(result.dryRun).toBe(false);
   });
 });
