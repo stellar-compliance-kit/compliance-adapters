@@ -17,7 +17,7 @@ lives in the other repo.
 
 ## What's in this repo
 
-This is a monorepo with three independent packages:
+This is a monorepo with three independent packages and a runnable examples directory:
 
 - **[`sep10-auth`](./sep10-auth)** — builds and verifies [SEP-10](https://stellar.org/protocol/sep-10)
   web authentication challenges, so you can confirm a request is really coming from the Stellar
@@ -31,6 +31,35 @@ This is a monorepo with three independent packages:
   reference pattern for reacting to on-chain compliance state changes.
 
 Each package has its own `README.md`, tests, and `package.json`.
+
+## Examples
+
+Runnable examples live under [`examples/`](./examples). Each is a self-contained npm workspace
+that wires the adapters together in a realistic scenario.
+
+### [`examples/sep10-sanctions-gate`](./examples/sep10-sanctions-gate)
+
+An Express server exposing a single gated route (`GET /gated`) that composes `sep10-auth` and
+`sanctions-oracle` end-to-end:
+
+1. `createSep10Middleware` from `sep10-auth` validates the caller's SEP-10 Bearer token and
+   attaches the verified Stellar address to `req.stellarAddress`. Unauthenticated requests get
+   a 401 before the sanctions check ever runs.
+2. The verified address is checked against a `SanctionsProvider`. A flagged address gets a 403;
+   a clean address gets a 200 with the verified address echoed back.
+
+To run it locally (requires a real `SERVER_ACCOUNT_ID` env var pointing to a Stellar G... key):
+
+```bash
+npm install --workspace=sep10-sanctions-gate
+SERVER_ACCOUNT_ID=G... HOME_DOMAIN=localhost:3000 npm run dev --workspace=sep10-sanctions-gate
+```
+
+To run its tests:
+
+```bash
+npm test --workspace=sep10-sanctions-gate
+```
 
 ## Quick start
 
