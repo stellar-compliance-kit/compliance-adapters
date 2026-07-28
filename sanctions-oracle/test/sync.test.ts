@@ -62,3 +62,39 @@ describe('syncSanctionsToDenylist', () => {
     expect(result.written).toEqual([FLAGGED_ADDRESS]);
   });
 });
+
+describe('stdin address reading support', () => {
+  it('parses addresses from stdin when --addresses - is passed', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const stdinAddresses = [FLAGGED_ADDRESS, CLEAN_ADDRESS];
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: stdinAddresses,
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toContain(FLAGGED_ADDRESS);
+    expect(result.written).toContain(FLAGGED_ADDRESS);
+  });
+
+  it('handles empty JSON array from stdin', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [],
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.checked).toBe(0);
+    expect(result.flagged).toEqual([]);
+    expect(result.written).toEqual([]);
+    expect(writer.addToDenylist).not.toHaveBeenCalled();
+  });
+});
