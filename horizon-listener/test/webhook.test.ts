@@ -34,4 +34,15 @@ describe('HttpWebhookSender', () => {
 
     await expect(sender.send(makeEvent())).rejects.toThrow(/status 500/);
   });
+
+  it('includes URL and status code in error message when response is not ok', async () => {
+    const url = 'http://localhost:9999/webhook';
+    const status = 503;
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status });
+    const sender = new HttpWebhookSender({ url, fetchImpl });
+
+    const error = await sender.send(makeEvent()).catch((e) => e);
+    expect(error.message).toContain(url);
+    expect(error.message).toContain(String(status));
+  });
 });
