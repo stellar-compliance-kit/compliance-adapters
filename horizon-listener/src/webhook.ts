@@ -1,3 +1,4 @@
+import { computeBackoffDelayMs } from './backoff';
 import type { RawContractEvent } from './eventSource';
 
 export interface WebhookSender {
@@ -8,12 +9,14 @@ export interface HttpWebhookSenderOptions {
   url: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  maxRetries?: number;
 }
 
 export class HttpWebhookSender implements WebhookSender {
   private readonly url: string;
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number | undefined;
+  private readonly maxRetries: number;
 
   constructor(options: HttpWebhookSenderOptions) {
     this.url = options.url;
@@ -21,32 +24,51 @@ export class HttpWebhookSender implements WebhookSender {
     // make a real network call.
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs;
+    this.maxRetries = options.maxRetries ?? 3;
   }
 
   async send(event: RawContractEvent): Promise<void> {
-    const controller = this.timeoutMs ? new AbortController() : undefined;
-    let timeoutHandle: NodeJS.Timeout | undefined;
+    let lastError: Error | undefined;
 
-    try {
-      if (controller && this.timeoutMs) {
-        timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
+    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
+      if (attempt > 0) {
+        const delayMs = computeBackoffDelayMs(attempt - 1);
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
 
-      const response = await this.fetchImpl(this.url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ event }),
-        signal: controller?.signal,
-      });
+      try {
+        const controller = this.timeoutMs ? new AbortController() : undefined;
+        let timeoutHandle: NodeJS.Timeout | undefined;
 
-      if (!response.ok) {
-        throw new Error(
-          `horizon-listener: webhook POST to ${this.url} failed with status ${response.status}`,
-        );
-      }
-    } finally {
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
+        try {
+          if (controller && this.timeoutMs) {
+            timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
+          }
+
+          const response = await this.fetchImpl(this.url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ event }),
+            signal: controller?.signal,
+          });
+
+          if (!response.ok) {
+            throw new Error(
+              `horizon-listener: webhook POST to ${this.url} failed with status ${response.status}`,
+            );
+          }
+
+          return;
+        } finally {
+          if (timeoutHandle) {
+            clearTimeout(timeoutHandle);
+          }
+        }
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        if (attempt === this.maxRetries) {
+          throw lastError;
+        }
       }
     }
   }
