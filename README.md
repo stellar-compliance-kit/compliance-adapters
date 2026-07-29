@@ -32,6 +32,46 @@ This is a monorepo with three independent packages:
 
 Each package has its own `README.md`, tests, and `package.json`.
 
+## Architecture
+
+The diagram below shows how the three packages fit together in a typical deployment alongside the on-chain contracts from [`compliance-primitives`](https://github.com/stellar-compliance-kit/compliance-primitives).
+
+```mermaid
+flowchart TD
+    Client(["Client\n(Stellar wallet)"])
+    App["Your API / App Server"]
+    Sep10["sep10-auth\n(challenge · verify · middleware)"]
+    Oracle["sanctions-oracle\n(SanctionsProvider · syncSanctionsToDenylist)"]
+    Listener["horizon-listener\n(RpcEventSource · HorizonListener)"]
+    Watchlist[["External watchlist\n/ sanctions data source"]]
+    Webhook["Your webhook handler\n(re-acts to on-chain state changes)"]
+    Soroban(["Soroban RPC\n(soroban-testnet / pubnet)"])
+    Contracts["compliance-primitives contracts\n(denylist-gate · allowlist-token · jurisdiction-flag)"]
+
+    Client -->|"1 · request challenge"| Sep10
+    Sep10 -->|"2 · unsigned challenge XDR"| Client
+    Client -->|"3 · signed challenge XDR"| Sep10
+    Sep10 -->|"4 · verified Stellar address\n(req.stellarAddress)"| App
+
+    App -->|"5 · compliance check\n(is address denied / allowed?)"| Contracts
+
+    Watchlist -->|"flagged addresses"| Oracle
+    Oracle -->|"add_to_denylist(address)\nvia Stellar SDK"| Soroban
+    Soroban -->|"transaction applied"| Contracts
+
+    Contracts -->|"emit AddedToDenylist /\nAddedToAllowlist events"| Soroban
+    Listener -->|"poll getEvents (cursor-based)"| Soroban
+    Listener -->|"HTTP POST event payload"| Webhook
+    Webhook -->|"trigger re-sync /\nalert / audit log"| Oracle
+```
+
+**Flow summary:**
+
+1. `sep10-auth` authenticates the caller's Stellar address before any compliance check runs.
+2. Your app server queries the on-chain `denylist-gate` / `allowlist-token` / `jurisdiction-flag` contracts to decide whether the authenticated address is permitted.
+3. `sanctions-oracle` periodically pulls flagged addresses from an external watchlist and pushes them into `denylist-gate` via Soroban RPC.
+4. `horizon-listener` polls Soroban RPC for contract events (e.g. `AddedToDenylist`) and forwards them to a webhook, allowing downstream services to react to on-chain state changes in near-real-time — for example by triggering a fresh `sanctions-oracle` sync.
+
 ## Quick start
 
 Requires Node 20+.
