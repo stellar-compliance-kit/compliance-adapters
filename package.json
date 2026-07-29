@@ -4,6 +4,7 @@
   "version": "0.1.0",
   "description": "Integration adapters connecting Stellar compliance primitives to SEP-10 auth, sanctions oracles, and Horizon event streams.",
   "workspaces": [
+    "logger",
     "sep10-auth",
     "sanctions-oracle",
     "horizon-listener"

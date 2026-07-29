@@ -12,7 +12,8 @@
     "test": "jest"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^16.0.1"
+    "@stellar/stellar-sdk": "^16.0.1",
+    "@compliance-adapters/logger": "*"
   },
   "peerDependencies": {
     "express": "^4.19.0"
@@ -32,6 +33,7 @@
     "express": "^4.19.0",
     "babel-jest": "^29.7.0",
     "@babel/core": "^7.25.2",
-    "@babel/preset-env": "^7.25.4"
+    "@babel/preset-env": "^7.25.4",
+    "fast-check": "4.9.0"
   }
 }
