@@ -17,9 +17,15 @@
     "test": "npm run test --workspaces --if-present",
     "lint": "eslint . --ext .ts",
     "format": "prettier --check .",
-    "format:write": "prettier --write ."
+    "format:write": "prettier --write .",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "changelog": "changeset status",
+    "release": "changeset publish"
   },
   "devDependencies": {
+    "@changesets/changelog-github": "^0.7.0",
+    "@changesets/cli": "^2.31.1",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "eslint": "^8.57.0",

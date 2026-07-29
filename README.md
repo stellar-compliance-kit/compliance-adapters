@@ -113,6 +113,30 @@ See [CHANGELOG.md](./CHANGELOG.md) for release notes and version history.
 ## Contributing
 
 Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and workflow details.
+
+## Release tooling
+
+This monorepo uses Changesets for coordinated package releases and changelog generation.
+
+To create a release note for changed packages:
+
+```bash
+npm run changeset
+```
+
+Then to version packages and generate changelog entries:
+
+```bash
+npm run version
+```
+
+After review, publish releases with:
+
+```bash
+npm run release
+```
+
+Changesets will manage consistent version bumps across `sep10-auth`, `sanctions-oracle`, and `horizon-listener`.
 This repo participates in the [Drips Wave](https://www.drips.network/) Stellar Program and is
 deliberately kept full of small, well-scoped issues. Open issues are labeled by complexity
 (`complexity: trivial`, `complexity: medium`, `complexity: high`) so you can pick work that
