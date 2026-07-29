@@ -1,5 +1,6 @@
 import type { EventSource, RawContractEvent } from './eventSource';
 import { computeBackoffDelayMs, type BackoffOptions } from './backoff';
+import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 
 export interface Logger {
   debug: (...args: unknown[]) => void;
@@ -27,6 +28,12 @@ export interface HorizonListenerOptions {
   // Injectable so tests can force deterministic (or jitter-free) backoff delays
   // instead of depending on Math.random.
   backoffOptions?: BackoffOptions;
+  /**
+   * Optional metrics registry.  Pass a `MetricsRegistry` instance to record
+   * per-phase counters and latency histograms.  When omitted (or when a
+   * `NoopMetricsRegistry` is passed) all instrumentation is zero-overhead.
+   */
+  metrics?: AnyMetricsRegistry;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -40,6 +47,7 @@ export class HorizonListener {
   private readonly logger: Logger;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly backoffOptions: BackoffOptions;
+  private readonly metrics: AnyMetricsRegistry;
 
   private cursor: string | undefined;
   private running = false;
@@ -53,6 +61,7 @@ export class HorizonListener {
     this.logger = options.logger ?? consoleLogger;
     this.sleep = options.sleep ?? defaultSleep;
     this.backoffOptions = options.backoffOptions ?? {};
+    this.metrics = options.metrics ?? new NoopMetricsRegistry();
   }
 
   // Soroban RPC's getEvents is a polling/cursor API, not a persistent stream, so
@@ -63,9 +72,14 @@ export class HorizonListener {
 
     while (this.running) {
       let response: { events: RawContractEvent[]; nextCursor: string };
+      const pollStart = Date.now();
       try {
         response = await this.eventSource.getEvents(this.cursor);
       } catch (err) {
+        const pollDuration = Date.now() - pollStart;
+        this.metrics.counter.inc('rpc_poll', 'failure');
+        this.metrics.histogram.observe('rpc_poll', pollDuration);
+
         this.attempt += 1;
         this.logger.warn(
           `horizon-listener: poll failed (attempt ${this.attempt}/${this.maxRetries}), backing off`,
@@ -74,6 +88,7 @@ export class HorizonListener {
 
         if (this.attempt >= this.maxRetries) {
           this.running = false;
+          this.metrics.counter.inc('rpc_poll', 'cancelled');
           throw new Error(
             `horizon-listener: giving up after ${this.attempt} consecutive failed polls`,
           );
@@ -84,14 +99,25 @@ export class HorizonListener {
         continue;
       }
 
+      const pollDuration = Date.now() - pollStart;
+      this.metrics.counter.inc('rpc_poll', 'success');
+      this.metrics.histogram.observe('rpc_poll', pollDuration);
+
       this.attempt = 0;
 
       for (const event of response.events) {
+        const relayStart = Date.now();
         try {
           this.logger.info('horizon-listener: received contract event', event);
           await this.onEvent(event);
+          const relayDuration = Date.now() - relayStart;
+          this.metrics.counter.inc('event_relay', 'success');
+          this.metrics.histogram.observe('event_relay', relayDuration);
         } catch (err) {
+          const relayDuration = Date.now() - relayStart;
           this.logger.error('horizon-listener: onEvent handler threw', err);
+          this.metrics.counter.inc('event_relay', 'failure');
+          this.metrics.histogram.observe('event_relay', relayDuration);
         }
       }
 

@@ -9,6 +9,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
+import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 
 export interface DenylistWriter {
   addToDenylist(address: string): Promise<{ hash: string }>;
@@ -25,6 +26,12 @@ export interface SyncOptions {
   addresses: string[];
   writer: DenylistWriter;
   dryRun?: boolean;
+  /**
+   * Optional metrics registry.  Pass a `MetricsRegistry` instance to record
+   * per-phase counters and latency histograms for `address_check` and
+   * `denylist_write` operations.  When omitted all instrumentation is a no-op.
+   */
+  metrics?: AnyMetricsRegistry;
 }
 
 export interface SyncResult {
@@ -35,13 +42,25 @@ export interface SyncResult {
 }
 
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
-  const { provider, addresses, writer, dryRun = false } = options;
+  const { provider, addresses, writer, dryRun = false, metrics = new NoopMetricsRegistry() } =
+    options;
 
   const flagged: string[] = [];
   for (const address of addresses) {
-    const result = await provider.checkAddress(address);
-    if (result.flagged) {
-      flagged.push(address);
+    const start = Date.now();
+    try {
+      const result = await provider.checkAddress(address);
+      const durationMs = Date.now() - start;
+      metrics.counter.inc('address_check', 'success');
+      metrics.histogram.observe('address_check', durationMs);
+      if (result.flagged) {
+        flagged.push(address);
+      }
+    } catch (err) {
+      const durationMs = Date.now() - start;
+      metrics.counter.inc('address_check', 'failure');
+      metrics.histogram.observe('address_check', durationMs);
+      throw err;
     }
   }
 
@@ -52,8 +71,19 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     }
   } else {
     for (const address of flagged) {
-      await writer.addToDenylist(address);
-      written.push(address);
+      const start = Date.now();
+      try {
+        await writer.addToDenylist(address);
+        const durationMs = Date.now() - start;
+        metrics.counter.inc('denylist_write', 'success');
+        metrics.histogram.observe('denylist_write', durationMs);
+        written.push(address);
+      } catch (err) {
+        const durationMs = Date.now() - start;
+        metrics.counter.inc('denylist_write', 'failure');
+        metrics.histogram.observe('denylist_write', durationMs);
+        throw err;
+      }
     }
   }
 
