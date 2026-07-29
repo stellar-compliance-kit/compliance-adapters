@@ -8,3 +8,4 @@ export {
   SyncResult,
   RpcDenylistWriterOptions,
 } from './sync';
+export { RateLimitedSanctionsProvider, RateLimitOptions } from './rateLimitedProvider';
