@@ -9,6 +9,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
+import { type AnyTracer, NoopTracer } from './tracing';
 
 export interface DenylistWriter {
   addToDenylist(address: string): Promise<{ hash: string }>;
@@ -25,6 +26,15 @@ export interface SyncOptions {
   addresses: string[];
   writer: DenylistWriter;
   dryRun?: boolean;
+  /**
+   * Optional tracer for OpenTelemetry-compatible distributed tracing.
+   * When omitted, a no-op tracer is used — zero overhead and no exports.
+   *
+   * Stellar addresses are NOT attached to spans unless
+   * \`TracingOptions.redactPayload\` is explicitly set to \`false\` on the
+   * tracer; the span will carry only phase and outcome attributes.
+   */
+  tracer?: AnyTracer;
 }
 
 export interface SyncResult {
@@ -35,13 +45,25 @@ export interface SyncResult {
 }
 
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
-  const { provider, addresses, writer, dryRun = false } = options;
+  const { provider, addresses, writer, dryRun = false, tracer = new NoopTracer() } = options;
 
   const flagged: string[] = [];
   for (const address of addresses) {
-    const result = await provider.checkAddress(address);
-    if (result.flagged) {
-      flagged.push(address);
+    const span = tracer.startSpan('address_check');
+    // address is omitted from spans by default (privacy / cardinality).
+    // The number of addresses processed is captured at the summary level instead.
+    span.setAttribute('address_check.index', addresses.indexOf(address));
+
+    try {
+      const result = await provider.checkAddress(address);
+      span.setAttribute('address_check.flagged', result.flagged);
+      span.end('ok');
+      if (result.flagged) {
+        flagged.push(address);
+      }
+    } catch (err) {
+      span.end('error', err instanceof Error ? err : new Error(String(err)));
+      throw err;
     }
   }
 
@@ -52,8 +74,17 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     }
   } else {
     for (const address of flagged) {
-      await writer.addToDenylist(address);
-      written.push(address);
+      const span = tracer.startSpan('denylist_write');
+      // transaction hash is set after success — it's a stable, non-PII identifier
+      try {
+        const result = await writer.addToDenylist(address);
+        span.setAttribute('denylist_write.tx_hash', result.hash);
+        span.end('ok');
+        written.push(address);
+      } catch (err) {
+        span.end('error', err instanceof Error ? err : new Error(String(err)));
+        throw err;
+      }
     }
   }
 
