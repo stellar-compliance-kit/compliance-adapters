@@ -16,7 +16,8 @@
     "test": "npm run test --workspaces --if-present",
     "lint": "eslint . --ext .ts",
     "format": "prettier --check .",
-    "format:write": "prettier --write ."
+    "format:write": "prettier --write .",
+    "apply-package-labels": "node ./scripts/apply-package-labels.js"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^7.18.0",
