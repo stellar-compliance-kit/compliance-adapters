@@ -8,3 +8,4 @@ export {
   SyncResult,
   RpcDenylistWriterOptions,
 } from './sync';
+export type { Logger } from '@compliance-adapters/logger';

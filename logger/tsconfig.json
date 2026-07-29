@@ -2,10 +2,7 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "outDir": "dist",
-    "rootDir": "src",
-    "paths": {
-      "@compliance-adapters/logger": ["../logger/src/index.ts"]
-    }
+    "rootDir": "src"
   },
   "include": ["src"]
 }

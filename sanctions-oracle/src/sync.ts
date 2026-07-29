@@ -7,6 +7,7 @@ import {
   nativeToScVal,
   rpc,
 } from '@stellar/stellar-sdk';
+import { type Logger, noopLogger, consoleLogger } from '@compliance-adapters/logger';
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
 
@@ -25,6 +26,7 @@ export interface SyncOptions {
   addresses: string[];
   writer: DenylistWriter;
   dryRun?: boolean;
+  logger?: Logger;
 }
 
 export interface SyncResult {
@@ -36,24 +38,34 @@ export interface SyncResult {
 
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
   const { provider, addresses, writer, dryRun = false } = options;
+  const logger = options.logger ?? noopLogger;
+
+  logger.info('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
 
   const flagged: string[] = [];
   for (const address of addresses) {
     const result = await provider.checkAddress(address);
     if (result.flagged) {
       flagged.push(address);
+      logger.debug('sanctions-oracle: address flagged', { address, source: result.source });
     }
   }
+
+  logger.info('sanctions-oracle: screening complete', {
+    checked: addresses.length,
+    flagged: flagged.length,
+  });
 
   const written: string[] = [];
   if (dryRun) {
     for (const address of flagged) {
-      console.log(`[dry-run] would call add_to_denylist(${address})`);
+      logger.info(`sanctions-oracle: [dry-run] would call add_to_denylist`, { address });
     }
   } else {
     for (const address of flagged) {
-      await writer.addToDenylist(address);
+      const { hash } = await writer.addToDenylist(address);
       written.push(address);
+      logger.info('sanctions-oracle: address written to denylist', { address, hash });
     }
   }
 
@@ -141,10 +153,14 @@ function parseArgs(argv: string[]): CliArgs {
 }
 
 async function runCli(): Promise<void> {
+  // The CLI entrypoint uses consoleLogger so dry-run output and errors are
+  // visible by default; programmatic callers should inject their own logger.
+  const logger = consoleLogger;
+
   const args = parseArgs(process.argv.slice(2));
 
   if (!args.addressesPath) {
-    console.error('Missing required flag: --addresses <path-to-json-array>');
+    logger.error('Missing required flag: --addresses <path-to-json-array>');
     process.exitCode = 1;
     return;
   }
@@ -164,13 +180,15 @@ async function runCli(): Promise<void> {
         },
       },
       dryRun: true,
+      logger,
     });
+    logger.info('sanctions-oracle: dry-run result', result);
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   if (!args.contractId || !args.rpcUrl || !args.networkPassphrase || !args.secretKey) {
-    console.error(
+    logger.error(
       'Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, --secret-key (or pass --dry-run).',
     );
     process.exitCode = 1;
@@ -184,7 +202,7 @@ async function runCli(): Promise<void> {
     sourceKeypair: Keypair.fromSecret(args.secretKey),
   });
 
-  const result = await syncSanctionsToDenylist({ provider, addresses, writer, dryRun: false });
+  const result = await syncSanctionsToDenylist({ provider, addresses, writer, dryRun: false, logger });
   console.log(JSON.stringify(result, null, 2));
 }
 
