@@ -16,6 +16,7 @@
     "test": "npm run test --workspaces --if-present",
     "lint": "eslint . --ext .ts",
     "format": "prettier --check .",
+    "format:check": "prettier --check .",
     "format:write": "prettier --write ."
   },
   "devDependencies": {
