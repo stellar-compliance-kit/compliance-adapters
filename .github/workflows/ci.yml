@@ -34,5 +34,8 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
   # No Rust/Soroban adapter contracts exist in this repo yet. If one is added
   # under a package with a Cargo.toml, add a matching `cargo test` job here.
