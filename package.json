@@ -6,7 +6,8 @@
   "workspaces": [
     "sep10-auth",
     "sanctions-oracle",
-    "horizon-listener"
+    "horizon-listener",
+    "examples/full-stack-demo"
   ],
   "engines": {
     "node": ">=20.0.0"
