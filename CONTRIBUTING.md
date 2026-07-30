@@ -43,6 +43,25 @@ npm test --workspace=sep10-auth
 4. Run `npm run lint` and `npm test` locally before opening a PR.
 5. Open a PR referencing the issue number (`Fixes #123`) and describe what you changed and why.
 
+## Branch protection (recommended)
+
+The repository intends to enforce the following branch protection rules on `main` to ensure
+stability and code review quality. These settings should be configured in the repository settings
+by an admin; this document provides the single source of truth and rationale for maintainers.
+
+- **Require pull request reviews before merging**: At least one approving review is required for all PRs. For
+  security-sensitive or cross-package changes, request two reviewers.
+- **Require status checks to pass before merging**: Enforce `npm run lint` and the test suite across workspaces.
+  The exact status check names depend on CI configuration; ensure the CI publishes checks for lint and tests.
+- **Dismiss stale pull request approvals when new commits are pushed**: Ensures reviewers re-check updated code.
+- **Require branches to be up to date before merging**: Require PR branches to include the latest `main` to avoid
+  merging with stale code.
+- **Restrict who can push to `main`**: Only allow repository administrators to push directly; all changes should
+  go through pull requests.
+
+If you are an admin setting these rules, the above provides the intended configuration. If you are a contributor
+and your PR is blocked by branch protection, follow the PR checks and request reviewers as described above.
+
 ## Code style
 
 - TypeScript, Node 20+. Formatting is enforced by Prettier/ESLint (`npm run lint`).
