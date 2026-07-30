@@ -10,6 +10,7 @@ import {
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
 import { withRetry, RetryOptions } from './retry';
+import { computeBackoffDelayMs } from './backoff';
 
 interface CacheEntry {
   result: { flagged: boolean; source: string };
@@ -84,6 +85,11 @@ export interface DenylistWriter {
   addToDenylist(address: string): Promise<{ hash: string }>;
 }
 
+export interface Logger {
+  log(message: string): void;
+  error(message: string): void;
+}
+
 export interface SyncOptions {
   provider: SanctionsProvider;
   /**
@@ -102,6 +108,22 @@ export interface SyncOptions {
    * If provided, results are cached with a configurable TTL.
    */
   cache?: ProviderResultCache;
+  /**
+   * Optional logger for progress logging during large address syncs.
+   * If provided, logs will be emitted periodically (every progressInterval addresses).
+   */
+  logger?: Logger;
+  /**
+   * Number of addresses to process before emitting a progress log.
+   * Defaults to 100 if logger is provided.
+   */
+  progressInterval?: number;
+  /**
+   * Optional concurrency limit for provider.checkAddress calls.
+   * If provided, limits the number of concurrent address checks.
+   * Defaults to unlimited (sequential processing).
+   */
+  concurrency?: number;
 }
 
 /**
@@ -125,27 +147,78 @@ interface FlaggedAddressWithSource {
   source: string;
 }
 
+async function executeConcurrent<T>(
+  items: T[],
+  fn: (item: T) => Promise<void>,
+  concurrency?: number,
+): Promise<void> {
+  if (!concurrency || concurrency >= items.length) {
+    for (const item of items) {
+      await fn(item);
+    }
+    return;
+  }
+
+  const queue = [...items];
+  const active: Promise<void>[] = [];
+
+  while (queue.length > 0 || active.length > 0) {
+    while (active.length < concurrency && queue.length > 0) {
+      const item = queue.shift()!;
+      const promise = fn(item).then(() => {
+        active.splice(active.indexOf(promise), 1);
+      });
+      active.push(promise);
+    }
+
+    if (active.length > 0) {
+      await Promise.race(active);
+    }
+  }
+}
+
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
-  const { provider, addresses, writer, dryRun = false, retry, cache } = options;
+  const {
+    provider,
+    addresses,
+    writer,
+    dryRun = false,
+    retry,
+    cache,
+    logger,
+    progressInterval = 100,
+    concurrency,
+  } = options;
 
   const flagged: string[] = [];
   const flaggedWithSource: FlaggedAddressWithSource[] = [];
   const failed: string[] = [];
-  for (const address of addresses) {
-    try {
-      let result = cache?.get(address);
-      if (!result) {
-        result = await withRetry(() => provider.checkAddress(address), retry);
-        cache?.set(address, result);
+  let checked = 0;
+
+  await executeConcurrent(
+    addresses,
+    async (address) => {
+      try {
+        let result = cache?.get(address);
+        if (!result) {
+          result = await withRetry(() => provider.checkAddress(address), retry);
+          cache?.set(address, result);
+        }
+        if (result.flagged) {
+          flagged.push(address);
+          flaggedWithSource.push({ address, source: result.source });
+        }
+      } catch (err) {
+        failed.push(address);
+      } finally {
+        checked += 1;
+        if (logger && checked % progressInterval === 0) {
+          logger.log(`Progress: ${checked}/${addresses.length} addresses checked`);
+        }
       }
-      if (result.flagged) {
-        flagged.push(address);
-        flaggedWithSource.push({ address, source: result.source });
-      }
-    } catch (err) {
-      failed.push(address);
-    }
-  }
+    },
+    concurrency,
+  );
 
   const written: string[] = [];
   if (dryRun) {
@@ -185,13 +258,23 @@ export interface RpcDenylistWriterOptions {
    * Called with address, timestamp, source, and resulting transaction hash.
    */
   auditLogger?: AuditLogger;
+  /**
+   * Optional maximum number of retry attempts for sendTransaction.
+   * Defaults to 3.
+   */
+  maxRetries?: number;
+  /**
+   * Optional backoff options for retry delays.
+   */
+  backoffOptions?: any;
 }
 
 // Kept behind the DenylistWriter interface (rather than called directly
 // from syncSanctionsToDenylist) so tests can inject a fake writer instead
 // of touching a live RPC endpoint.
 export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> } {
-  const { rpcUrl, networkPassphrase, contractId, sourceKeypair, auditLogger } = options;
+  const { rpcUrl, networkPassphrase, contractId, sourceKeypair, auditLogger, maxRetries = 3, backoffOptions } =
+    options;
   const server = new rpc.Server(rpcUrl);
   const contract = new Contract(contractId);
 
@@ -207,11 +290,33 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
         .setTimeout(30)
         .build();
 
-      const prepared = await server.prepareTransaction(tx);
+      let prepared;
+      try {
+        prepared = await server.prepareTransaction(tx);
+      } catch (error) {
+        const err = error instanceof Error ? error.message : String(error);
+        throw new Error(`Failed to prepare transaction (simulation error): ${err}`);
+      }
+
       prepared.sign(sourceKeypair);
 
-      const sendResult = await server.sendTransaction(prepared);
-      return { hash: sendResult.hash };
+      let sendResult;
+      let lastError;
+      for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+          sendResult = await server.sendTransaction(prepared);
+          return { hash: sendResult.hash };
+        } catch (error) {
+          lastError = error;
+          if (attempt < maxRetries - 1) {
+            const delayMs = computeBackoffDelayMs(attempt, backoffOptions);
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+          }
+        }
+      }
+
+      const err = lastError instanceof Error ? lastError.message : String(lastError);
+      throw new Error(`Failed to send transaction after ${maxRetries} attempts: ${err}`);
     },
     async addToDenylistWithSource(address: string, source: string): Promise<{ hash: string; auditLog?: AuditLogEntry }> {
       const account = await server.getAccount(sourceKeypair.publicKey());
