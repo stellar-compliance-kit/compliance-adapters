@@ -180,6 +180,31 @@ process manager would be responsible for restarting the process.
 Individual `onEvent` handler errors are caught and logged without stopping
 the polling loop, so one bad event doesn't take down the whole listener.
 
+## Graceful shutdown
+
+For clean shutdown in a long-running Node process, call `HorizonListener.stop()`
+from a signal handler:
+
+```ts
+process.on('SIGINT', () => {
+  console.log('Shutting down gracefully...');
+  listener.stop();
+});
+
+process.on('SIGTERM', () => {
+  console.log('Shutting down gracefully...');
+  listener.stop();
+});
+
+listener.start().catch((err) => {
+  console.error('horizon-listener gave up after repeated failures', err);
+  process.exit(1);
+});
+```
+
+See `examples/graceful-shutdown.ts` for a complete example using the webhook
+forwarder factory.
+
 ## Logging
 
 All logging is routed through an injectable `Logger` interface with a default

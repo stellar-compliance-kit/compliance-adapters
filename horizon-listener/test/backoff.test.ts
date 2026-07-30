@@ -99,4 +99,36 @@ describe('computeBackoffDelayMs', () => {
     expect(delay).toBeLessThanOrEqual(maxCap);
     expect(delay).toBeGreaterThanOrEqual(maxCap * 0.5);
   });
+
+  it('returns exactly min(maxMs, baseMs * 2**attempt) when jitter is disabled', () => {
+    const testCases = [
+      { attempt: 0, baseMs: 500, maxMs: 30000, expected: 500 },
+      { attempt: 1, baseMs: 500, maxMs: 30000, expected: 1000 },
+      { attempt: 2, baseMs: 500, maxMs: 30000, expected: 2000 },
+      { attempt: 5, baseMs: 500, maxMs: 30000, expected: 16000 },
+      { attempt: 6, baseMs: 500, maxMs: 30000, expected: 30000 },
+      { attempt: 7, baseMs: 500, maxMs: 30000, expected: 30000 },
+      { attempt: 3, baseMs: 100, maxMs: 5000, expected: 800 },
+      { attempt: 4, baseMs: 100, maxMs: 5000, expected: 1600 },
+      { attempt: 5, baseMs: 100, maxMs: 5000, expected: 3200 },
+      { attempt: 6, baseMs: 100, maxMs: 5000, expected: 5000 },
+    ];
+
+    for (const { attempt, baseMs, maxMs, expected } of testCases) {
+      const delay = computeBackoffDelayMs(attempt, { jitter: false, baseMs, maxMs });
+      expect(delay).toBe(expected);
+    }
+  });
+
+  it('never exceeds maxMs at high attempt counts and does not overflow or produce NaN', () => {
+    const maxMs = 30000;
+    const testAttempts = [10, 20, 50, 100, 1000];
+
+    for (const attempt of testAttempts) {
+      const delay = computeBackoffDelayMs(attempt, { jitter: false, maxMs });
+      expect(delay).toBe(maxMs);
+      expect(Number.isNaN(delay)).toBe(false);
+      expect(Number.isFinite(delay)).toBe(true);
+    }
+  });
 });
