@@ -16,4 +16,6 @@ module.exports = {
   moduleNameMapper: {
     '^@compliance-adapters/logger$': '<rootDir>/../logger/src/index.ts',
   },
+  collectCoverageFrom: ['src/**/*.ts'],
+  coverageReporters: ['text', 'lcov', 'json-summary'],
 };

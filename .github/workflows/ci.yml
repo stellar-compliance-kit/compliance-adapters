@@ -41,7 +41,21 @@ jobs:
         run: npm run build
 
       - name: Unit Tests
-        run: npm test
+        run: npm test -- --coverage
+
+      - name: Report Coverage
+        if: always()
+        run: node scripts/report-coverage.js
+
+      - name: Upload Coverage Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-coverage-report
+          path: |
+            sep10-auth/coverage/
+            sanctions-oracle/coverage/
+            horizon-listener/coverage/
 
       - name: Audit dependencies
         run: npm audit --audit-level=high
