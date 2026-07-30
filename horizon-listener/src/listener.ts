@@ -27,6 +27,11 @@ export interface HorizonListenerOptions {
   // Injectable so tests can force deterministic (or jitter-free) backoff delays
   // instead of depending on Math.random.
   backoffOptions?: BackoffOptions;
+  // When set, the listener pages through all historical events from this ledger
+  // before entering normal live polling. Each page is consumed immediately
+  // (without sleeping pollIntervalMs between pages); the listener only switches
+  // to interval-based polling once a page returns zero events.
+  startLedger?: number;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -44,6 +49,7 @@ export class HorizonListener {
   private cursor: string | undefined;
   private running = false;
   private attempt = 0;
+  private backfilling = false;
 
   constructor(options: HorizonListenerOptions) {
     this.eventSource = options.eventSource;
@@ -53,6 +59,7 @@ export class HorizonListener {
     this.logger = options.logger ?? consoleLogger;
     this.sleep = options.sleep ?? defaultSleep;
     this.backoffOptions = options.backoffOptions ?? {};
+    this.backfilling = options.startLedger != null;
   }
 
   // Soroban RPC's getEvents is a polling/cursor API, not a persistent stream, so
@@ -97,6 +104,18 @@ export class HorizonListener {
 
       this.cursor = response.nextCursor;
       this.logger.debug('horizon-listener: cursor advanced', this.cursor);
+
+      if (this.backfilling) {
+        if (response.events.length === 0) {
+          this.backfilling = false;
+          this.logger.info('horizon-listener: backfill complete, switching to live polling');
+        } else {
+          this.logger.debug(
+            `horizon-listener: backfill page consumed (${response.events.length} events), fetching next page`,
+          );
+          continue;
+        }
+      }
 
       if (!this.running) {
         break;
