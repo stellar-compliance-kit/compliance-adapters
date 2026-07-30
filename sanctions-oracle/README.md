@@ -140,6 +140,49 @@ flagged address using `@stellar/stellar-sdk`'s `Contract`,
   points at, will fail when the transaction is simulated/prepared.
   Double check the contract ID and that it's deployed on the same
   network you're targeting.
+- **Sequence number errors (`tx_bad_seq` or similar)** — the error
+  message typically includes `bad sequence` or an HTTP 400 with
+  `transaction failed` during `sendTransaction`. This happens when the
+  source account's sequence number in the transaction doesn't match what
+  the network expects. Common causes:
+  - The source account is being used by another process or script
+    simultaneously (e.g. another sync run, a bot, or a manual wallet
+    transaction), causing sequence numbers to drift.
+  - A previous transaction from the same account hasn't been fully
+    ingested by the network yet before the next one is submitted.
+
+  **Fix:** ensure only one instance of the sync script runs against a
+  given source account at a time. If you need to run concurrent syncs,
+  use separate source accounts. If you're submitting many transactions
+  in a loop (one per flagged address), add a small delay between
+  submissions or poll `server.getTransaction(hash)` and wait for
+  `status === 'SUCCESS'` before submitting the next one.
+- **Rate limiting from the RPC endpoint (HTTP 429 or `ECONNRESET`)** —
+  public RPC endpoints (including `https://soroban-testnet.stellar.org`)
+  often enforce rate limits. Symptoms include:
+  - `HTTP 429 Too Many Requests` responses.
+  - Connection resets (`ECONNRESET`, `socket hang up`) mid-sync when
+    submitting many transactions in quick succession.
+  - Requests hanging or timing out after a batch of successful calls.
+
+  **Fix:** first run a `--dry-run` to confirm that address checking
+  works independently of submission throughput issues. Then add a
+  delay between transaction submissions (e.g. 1–2 seconds) to stay
+  within rate limits. For production workloads, consider using a
+  dedicated RPC provider with higher rate limits, or self-hosting an
+  RPC node.
+- **Clock skew causing transaction submission failures** — if the local
+  machine's clock is significantly out of sync with the Stellar network,
+  transactions may be rejected because their time bounds don't align
+  with the current ledger close time. The error may appear as a generic
+  `sendTransaction` failure or a `transaction failed` status with no
+  obvious explanation in the result codes.
+
+  **Fix:** synchronize your system clock with NTP. On most Linux
+  systems: `sudo ntpdate -u pool.ntp.org` or `sudo timedatectl
+  set-ntp true`. On macOS, ensure "Set date and time automatically" is
+  enabled in System Settings. A clock drift of more than 30 seconds is
+  likely to cause issues.
 
 ## Related
 
