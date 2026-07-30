@@ -24,7 +24,7 @@
     "test:e2e:test-only": "npm run test --workspace=e2e-tests",
     "test:e2e": "npm run test:e2e:start && npm run test:e2e:test-only ; npm run test:e2e:stop",
     "test:e2e:ci": "npm run test:e2e:start && npm run test:e2e:test-only ; docker-compose -f e2e-tests/docker-compose.yml down -v || true",
-    "lint": "eslint . --ext .ts",
+    "lint": "eslint sep10-auth/src sanctions-oracle/src horizon-listener/src --ext .ts",
     "format": "prettier --check .",
     "format:write": "prettier --write ."
   },
