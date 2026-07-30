@@ -32,7 +32,21 @@ jobs:
         run: npm run build
 
       - name: Test
-        run: npm test
+        run: npm test --workspaces -- --coverage
+
+      - name: Report Coverage
+        if: always()
+        run: node scripts/report-coverage.js
+
+      - name: Upload Coverage Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: code-coverage-report
+          path: |
+            sep10-auth/coverage/
+            sanctions-oracle/coverage/
+            horizon-listener/coverage/
 
   # No Rust/Soroban adapter contracts exist in this repo yet. If one is added
   # under a package with a Cargo.toml, add a matching `cargo test` job here.
