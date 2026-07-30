@@ -96,6 +96,23 @@ wins outright). See
 [`docs/provider-registry-design.md`](./docs/provider-registry-design.md)
 for the full design, including how provider errors are handled.
 
+## Configuration
+
+Copy the root [`.env.example`](../.env.example) to `.env` at the repo root and
+fill in the `sanctions-oracle` variables before running a live sync:
+
+| Variable | CLI flag equivalent | Description |
+|---|---|---|
+| `STELLAR_RPC_URL` | `--rpc-url` | Soroban RPC endpoint |
+| `STELLAR_NETWORK_PASSPHRASE` | `--network-passphrase` | Must match the network the RPC endpoint serves |
+| `DENYLIST_GATE_CONTRACT_ID` | `--contract-id` | Deployed `denylist-gate` contract to write flagged addresses into |
+| `SANCTIONS_SOURCE_SECRET` | `--secret-key` | Signing keypair that funds and signs denylist transactions |
+
+See the comments in `.env.example` for allowed values and testnet guidance.
+
+Dry-run mode (`--dry-run`) does not require `DENYLIST_GATE_CONTRACT_ID` or
+`SANCTIONS_SOURCE_SECRET` — it only logs planned calls without touching the network.
+
 ## Running the sync script
 
 Once built (`npm run build`), the sync script is available as the
