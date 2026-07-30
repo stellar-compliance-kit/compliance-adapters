@@ -222,6 +222,9 @@ If the challenge is unsigned, expired, or invalid:
 - **Performance Overhead**: Verifying cryptographic signatures (via `WebAuth.verifyChallengeTxSigners`) and parsing XDR on every HTTP request incurs non-trivial CPU overhead compared to verifying a lightweight, symmetric-key session token or JWT.
 - **Production Recommendation**: For production services, applications should use SEP-10 challenge verification once to authenticate the client, and upon successful verification, issue a short-lived session JWT or auth token for subsequent API requests.
 
+See [`examples/express-app`](./examples/express-app) for a small runnable
+Express app wiring together the full challenge/verify roundtrip.
+
 ## Scope
 
 This package only implements the SEP-10 building blocks (challenge

@@ -58,6 +58,13 @@ export function generateChallenge(
 
   const homeDomain = options.homeDomain ?? DEFAULT_HOME_DOMAIN;
   const webAuthDomain = options.webAuthDomain ?? homeDomain;
+
+  if (!options.homeDomain && process.env.NODE_ENV === 'production') {
+    console.warn(
+      `[sep10-auth] generateChallenge is using the default homeDomain "${DEFAULT_HOME_DOMAIN}" ` +
+        'in a production environment. Pass an explicit `homeDomain` option matching your deployed domain.',
+    );
+  }
   const networkPassphrase = options.networkPassphrase ?? Networks.TESTNET;
   const timeoutSeconds = options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
 

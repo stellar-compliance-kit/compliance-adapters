@@ -4,7 +4,7 @@ export interface VerifyChallengeOptions {
   serverAccountId: string;
   networkPassphrase?: string;
   homeDomains: string | string[];
-  webAuthDomain: string;
+  webAuthDomain: string | string[];
 }
 
 /**
@@ -31,42 +31,53 @@ export function verifyChallenge(
   options: VerifyChallengeOptions,
 ): VerifyResult {
   const networkPassphrase = options.networkPassphrase ?? Networks.TESTNET;
+  const webAuthDomains = Array.isArray(options.webAuthDomain)
+    ? options.webAuthDomain
+    : [options.webAuthDomain];
 
-  try {
-    const { clientAccountID, tx } = WebAuth.readChallengeTx(
-      signedTransactionXDR,
-      options.serverAccountId,
-      networkPassphrase,
-      options.homeDomains,
-      options.webAuthDomain,
-    );
+  // The underlying SDK only matches against a single webAuthDomain per call,
+  // so try each candidate in turn and succeed on the first match.
+  let lastError: unknown;
 
-    // Also validates that the client_domain operation's source key (if any)
-    // co-signed the transaction, per the SEP-10 client domain flow.
-    WebAuth.verifyChallengeTxSigners(
-      signedTransactionXDR,
-      options.serverAccountId,
-      networkPassphrase,
-      [clientAccountID],
-      options.homeDomains,
-      options.webAuthDomain,
-    );
+  for (const webAuthDomain of webAuthDomains) {
+    try {
+      const { clientAccountID, tx } = WebAuth.readChallengeTx(
+        signedTransactionXDR,
+        options.serverAccountId,
+        networkPassphrase,
+        options.homeDomains,
+        webAuthDomain,
+      );
 
-    const clientDomainOp = tx.operations.find(
-      (op): op is Operation.ManageData => op.type === 'manageData' && op.name === 'client_domain',
-    );
-    const clientDomain = clientDomainOp?.value?.toString();
+      // Also validates that the client_domain operation's source key (if any)
+      // co-signed the transaction, per the SEP-10 client domain flow.
+      WebAuth.verifyChallengeTxSigners(
+        signedTransactionXDR,
+        options.serverAccountId,
+        networkPassphrase,
+        [clientAccountID],
+        options.homeDomains,
+        webAuthDomain,
+      );
 
-    return {
-      valid: true,
-      address: clientAccountID,
-      ...(clientDomain ? { clientDomain } : {}),
-    };
-  } catch (error) {
-    return {
-      valid: false,
-      address: '',
-      error: error instanceof Error ? error.message : String(error),
-    };
+      const clientDomainOp = tx.operations.find(
+        (op): op is Operation.ManageData => op.type === 'manageData' && op.name === 'client_domain',
+      );
+      const clientDomain = clientDomainOp?.value?.toString();
+
+      return {
+        valid: true,
+        address: clientAccountID,
+        ...(clientDomain ? { clientDomain } : {}),
+      };
+    } catch (error) {
+      lastError = error;
+    }
   }
+
+  return {
+    valid: false,
+    address: '',
+    error: lastError instanceof Error ? lastError.message : String(lastError),
+  };
 }
