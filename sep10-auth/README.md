@@ -160,6 +160,60 @@ createSep10Middleware({
 });
 ```
 
+## Example Walkthrough
+
+Below is a step-by-step walkthrough showing how a client requests a SEP-10 challenge, signs it, and passes it to an Express endpoint protected with `createSep10Middleware`.
+
+### 1. Request a Challenge
+The client requests a SEP-10 challenge transaction from the auth server:
+
+```sh
+curl -X GET "https://auth.example.com/auth?account=G...&home_domain=example.com"
+```
+
+Example JSON response from server:
+```json
+{
+  "transaction": "AAAAAgAAAAA...",
+  "network_passphrase": "Test SDF Network ; July 2015"
+}
+```
+
+### 2. Sign Challenge Client-Side (Conceptual)
+The client signs the returned `transaction` XDR using their Stellar wallet keypair (e.g., Freighter or `@stellar/stellar-sdk`):
+
+```ts
+import { Keypair, Transaction } from '@stellar/stellar-sdk';
+
+const tx = new Transaction(challengeXDR, networkPassphrase);
+tx.sign(clientKeypair);
+const signedXDR = tx.toXDR();
+```
+
+### 3. Send Request to Protected Endpoint
+The client passes the signed XDR as a Bearer token in the `Authorization` header:
+
+```sh
+curl -X GET https://example.com/compliance/status \
+  -H "Authorization: Bearer AAAAAgAAAAA..."
+```
+
+#### Expected Success Response (`200 OK`)
+```json
+{
+  "address": "G..."
+}
+```
+
+#### Expected Error Response (`401 Unauthorized`)
+If the challenge is unsigned, expired, or invalid:
+```json
+{
+  "error": "unauthorized",
+  "reason": "Transaction has expired"
+}
+```
+
 ## Replay Risk & Performance Tradeoffs
 
 `createSep10Middleware` provides a simplified reference implementation that re-verifies the raw signed challenge transaction XDR on every incoming request via `Authorization: Bearer <base64-xdr>`. Consumers should note the following tradeoffs when using this pattern:
