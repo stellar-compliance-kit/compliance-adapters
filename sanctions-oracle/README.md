@@ -30,9 +30,15 @@ by invoking its `add_to_denylist(address)` contract function.
   `DenylistWriter` interface, so the sync logic can be unit tested with a
   fake writer, with no live network required.
 
-This package does **not** implement real sanctions data fetching, retry
-logic, or a provider registry — those are tracked as separate future
-issues.
+This package does **not** implement real sanctions data fetching or a
+provider registry — those are tracked as separate future issues.
+
+Provider calls made during a sync (`provider.checkAddress`) are wrapped in
+a retry-with-backoff helper (`withRetry`, see `src/retry.ts`): on failure
+they retry with exponential backoff up to a configurable number of
+attempts (`SyncOptions.retry`, default 3 attempts). If an address's
+provider check still fails after exhausting all attempts, that address is
+recorded in `SyncResult.failed` instead of aborting the whole sync run.
 
 ## The `SanctionsProvider` interface
 

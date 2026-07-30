@@ -9,6 +9,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
+import { withRetry, RetryOptions } from './retry';
 
 export interface DenylistWriter {
   addToDenylist(address: string): Promise<{ hash: string }>;
@@ -25,23 +26,32 @@ export interface SyncOptions {
   addresses: string[];
   writer: DenylistWriter;
   dryRun?: boolean;
+  /** Retry-with-backoff config applied around each provider.checkAddress call. */
+  retry?: RetryOptions;
 }
 
 export interface SyncResult {
   checked: number;
   flagged: string[];
   written: string[];
+  /** Addresses whose provider check failed on every retry attempt. */
+  failed: string[];
   dryRun: boolean;
 }
 
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
-  const { provider, addresses, writer, dryRun = false } = options;
+  const { provider, addresses, writer, dryRun = false, retry } = options;
 
   const flagged: string[] = [];
+  const failed: string[] = [];
   for (const address of addresses) {
-    const result = await provider.checkAddress(address);
-    if (result.flagged) {
-      flagged.push(address);
+    try {
+      const result = await withRetry(() => provider.checkAddress(address), retry);
+      if (result.flagged) {
+        flagged.push(address);
+      }
+    } catch (err) {
+      failed.push(address);
     }
   }
 
@@ -61,6 +71,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     checked: addresses.length,
     flagged,
     written,
+    failed,
     dryRun,
   };
 }
