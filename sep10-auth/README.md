@@ -120,118 +120,57 @@ This is a reference pattern: it re-verifies the raw challenge transaction on
 every request. A production deployment would typically verify once and issue
 a short-lived session token instead — that's out of scope for this package.
 
-Because there's no session token, a challenge can't be revoked before its
-`timeoutSeconds` elapses unless you supply a `revocationStore`. An in-memory
-reference implementation is included:
+### `rateLimiter(options?)`
+
+An Express middleware factory that rate-limits incoming requests using a
+sliding-window in-memory counter. Useful for protecting the challenge
+generation endpoint (or any other endpoint) from being hammered by a single
+client.
 
 ```ts
-import { createSep10Middleware, InMemoryRevocationStore } from 'sep10-auth';
+import express from 'express';
+import { rateLimiter } from 'sep10-auth';
 
-const revocationStore = new InMemoryRevocationStore();
+const app = express();
 
 app.use(
-  '/compliance',
-  createSep10Middleware({
-    serverAccountId: serverKeypair.publicKey(),
-    homeDomains: 'example.com',
-    webAuthDomain: 'auth.example.com',
-    revocationStore,
-  })
+  '/api/challenge',
+  rateLimiter({ windowMs: 30_000, maxRequests: 10 })
 );
 
-// elsewhere, to cut off access immediately:
-revocationStore.revoke(someAddress);
-```
-
-Implement the `RevocationStore` interface yourself to back it with Redis, a
-database, etc.
-
-sep10-auth has no built-in logging (and its lint config forbids `console.*`
-calls), so pass a `logger` implementing the `Logger` interface (`debug` /
-`info` / `warn` / `error`) if you want visibility into verification and
-revocation failures:
-
-```ts
-createSep10Middleware({
-  serverAccountId: serverKeypair.publicKey(),
-  homeDomains: 'example.com',
-  webAuthDomain: 'auth.example.com',
-  logger: console,
+app.post('/api/challenge', (req, res) => {
+  // ... generate and return the challenge ...
 });
 ```
 
-## Example Walkthrough
+**Options:**
 
-Below is a step-by-step walkthrough showing how a client requests a SEP-10 challenge, signs it, and passes it to an Express endpoint protected with `createSep10Middleware`.
+| Option | Default | Description |
+|--------|---------|-------------|
+| `windowMs` | `60000` (1 minute) | The time window in milliseconds during which requests are counted. |
+| `maxRequests` | `100` | The maximum number of requests allowed within the window. |
+| `keyGenerator` | `(req) => req.ip` | A function returning a unique key for each client (defaults to the request IP). |
 
-### 1. Request a Challenge
-The client requests a SEP-10 challenge transaction from the auth server:
+When the limit is exceeded the middleware responds with **429** and a JSON body:
 
-```sh
-curl -X GET "https://auth.example.com/auth?account=G...&home_domain=example.com"
-```
-
-Example JSON response from server:
 ```json
-{
-  "transaction": "AAAAAgAAAAA...",
-  "network_passphrase": "Test SDF Network ; July 2015"
-}
+{ "error": "rate_limit_exceeded", "retryAfter": 15 }
 ```
 
-### 2. Sign Challenge Client-Side (Conceptual)
-The client signs the returned `transaction` XDR using their Stellar wallet keypair (e.g., Freighter or `@stellar/stellar-sdk`):
+The `Retry-After` header is also set to the number of seconds the client should
+wait before retrying.
 
-```ts
-import { Keypair, Transaction } from '@stellar/stellar-sdk';
-
-const tx = new Transaction(challengeXDR, networkPassphrase);
-tx.sign(clientKeypair);
-const signedXDR = tx.toXDR();
-```
-
-### 3. Send Request to Protected Endpoint
-The client passes the signed XDR as a Bearer token in the `Authorization` header:
-
-```sh
-curl -X GET https://example.com/compliance/status \
-  -H "Authorization: Bearer AAAAAgAAAAA..."
-```
-
-#### Expected Success Response (`200 OK`)
-```json
-{
-  "address": "G..."
-}
-```
-
-#### Expected Error Response (`401 Unauthorized`)
-If the challenge is unsigned, expired, or invalid:
-```json
-{
-  "error": "unauthorized",
-  "reason": "Transaction has expired"
-}
-```
-
-## Replay Risk & Performance Tradeoffs
-
-`createSep10Middleware` provides a simplified reference implementation that re-verifies the raw signed challenge transaction XDR on every incoming request via `Authorization: Bearer <base64-xdr>`. Consumers should note the following tradeoffs when using this pattern:
-
-- **Replay Risk**: Because the middleware re-verifies the raw signed transaction XDR directly, any bearer token (signed XDR) intercepted in transit remains valid for authentication until its timebounds expire (by default 300 seconds). Without a server-side session store, token revocation, or single-use nonce tracking, an attacker possessing the signed XDR can replay it across multiple requests during the validity window.
-- **Performance Overhead**: Verifying cryptographic signatures (via `WebAuth.verifyChallengeTxSigners`) and parsing XDR on every HTTP request incurs non-trivial CPU overhead compared to verifying a lightweight, symmetric-key session token or JWT.
-- **Production Recommendation**: For production services, applications should use SEP-10 challenge verification once to authenticate the client, and upon successful verification, issue a short-lived session JWT or auth token for subsequent API requests.
-
-See [`examples/express-app`](./examples/express-app) for a small runnable
-Express app wiring together the full challenge/verify roundtrip.
+> **Note**: The in-memory store is process-local and not shared across
+> instances. For multi-process or multi-region deployments, replace this
+> middleware with a Redis-backed limiter such as `express-rate-limit`.
 
 ## Scope
 
 This package only implements the SEP-10 building blocks (challenge
-generation, verification, and a thin middleware). It does not collect the
-user's signature itself — clients are responsible for signing the challenge
-with their own wallet (e.g. [Freighter](https://www.freighter.app/) or
-another Stellar wallet) and sending the signed XDR back.
+generation, verification, thin middleware, and rate limiting). It does not
+collect the user's signature itself — clients are responsible for signing
+the challenge with their own wallet (e.g. [Freighter](https://www.freighter.app/)
+or another Stellar wallet) and sending the signed XDR back.
 
 See the [repo root README](../README.md) for how this package fits into the
 rest of `compliance-adapters`, and
