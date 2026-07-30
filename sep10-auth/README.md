@@ -38,6 +38,21 @@ const challenge = generateChallenge(clientAddress, serverKeypair, {
 // send challenge.transactionXDR to the client to sign
 ```
 
+To support the SEP-10 client domain flow (where a wallet's client-domain
+server co-signs the challenge), pass `clientDomain` along with the
+`clientSigningKey` published on `<clientDomain>/.well-known/stellar.toml`
+(this package does not fetch stellar.toml itself, so resolve the key
+yourself):
+
+```ts
+const challenge = generateChallenge(clientAddress, serverKeypair, {
+  homeDomain: 'example.com',
+  webAuthDomain: 'auth.example.com',
+  clientDomain: 'wallet.example',
+  clientSigningKey: 'GABC...', // from wallet.example/.well-known/stellar.toml
+});
+```
+
 ### `verifyChallenge(signedTransactionXDR, options)`
 
 Verifies a client-signed challenge transaction and returns the authenticated
@@ -54,6 +69,7 @@ const result = verifyChallenge(signedXDR, {
 
 if (result.valid) {
   // result.address is the authenticated Stellar account ID
+  // result.clientDomain is set if the challenge used the client domain flow
 } else {
   // result.error describes why verification failed
 }
@@ -88,6 +104,46 @@ app.get('/compliance/status', (req, res) => {
 This is a reference pattern: it re-verifies the raw challenge transaction on
 every request. A production deployment would typically verify once and issue
 a short-lived session token instead — that's out of scope for this package.
+
+Because there's no session token, a challenge can't be revoked before its
+`timeoutSeconds` elapses unless you supply a `revocationStore`. An in-memory
+reference implementation is included:
+
+```ts
+import { createSep10Middleware, InMemoryRevocationStore } from 'sep10-auth';
+
+const revocationStore = new InMemoryRevocationStore();
+
+app.use(
+  '/compliance',
+  createSep10Middleware({
+    serverAccountId: serverKeypair.publicKey(),
+    homeDomains: 'example.com',
+    webAuthDomain: 'auth.example.com',
+    revocationStore,
+  })
+);
+
+// elsewhere, to cut off access immediately:
+revocationStore.revoke(someAddress);
+```
+
+Implement the `RevocationStore` interface yourself to back it with Redis, a
+database, etc.
+
+sep10-auth has no built-in logging (and its lint config forbids `console.*`
+calls), so pass a `logger` implementing the `Logger` interface (`debug` /
+`info` / `warn` / `error`) if you want visibility into verification and
+revocation failures:
+
+```ts
+createSep10Middleware({
+  serverAccountId: serverKeypair.publicKey(),
+  homeDomains: 'example.com',
+  webAuthDomain: 'auth.example.com',
+  logger: console,
+});
+```
 
 ## Scope
 
