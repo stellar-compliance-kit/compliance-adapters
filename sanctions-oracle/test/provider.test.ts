@@ -2,25 +2,15 @@ import { SanctionsProvider } from '../src/SanctionsProvider';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 import { CsvSanctionsProvider } from '../src/csvProvider';
 import * as path from 'path';
+import { assertSanctionsProviderContract } from './providerContract';
 
 const KNOWN_FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
 const KNOWN_UNFLAGGED_ADDRESS = 'GDNOTPRESENTINANYMOCKWATCHLISTAAAAAAAAAAAAAAAAAAAAAAAAAA';
 
-async function assertConformsToSanctionsProvider(provider: SanctionsProvider): Promise<void> {
-  const flaggedResult = await provider.checkAddress(KNOWN_FLAGGED_ADDRESS);
-  expect(typeof flaggedResult.flagged).toBe('boolean');
-  expect(typeof flaggedResult.source).toBe('string');
-  expect(flaggedResult.source.length).toBeGreaterThan(0);
-
-  const unflaggedResult = await provider.checkAddress(KNOWN_UNFLAGGED_ADDRESS);
-  expect(typeof unflaggedResult.flagged).toBe('boolean');
-  expect(typeof unflaggedResult.source).toBe('string');
-  expect(unflaggedResult.source.length).toBeGreaterThan(0);
-}
-
 describe('SanctionsProvider interface conformance', () => {
-  it('MockSanctionsProvider conforms to the SanctionsProvider shape', async () => {
-    await assertConformsToSanctionsProvider(new MockSanctionsProvider());
+  it('MockSanctionsProvider conforms to the SanctionsProvider contract', async () => {
+    const provider = new MockSanctionsProvider();
+    await assertSanctionsProviderContract(provider);
   });
 
   it('CsvSanctionsProvider conforms to the SanctionsProvider shape', async () => {

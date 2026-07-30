@@ -398,7 +398,22 @@ export async function runCli(): Promise<void> {
     return;
   }
 
-  const addresses: string[] = JSON.parse(fs.readFileSync(args.addressesPath, 'utf8'));
+  let addresses: string[];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(args.addressesPath, 'utf8'));
+    if (!Array.isArray(parsed)) {
+      throw new Error('Addresses file must contain a JSON array');
+    }
+    if (!parsed.every((item) => typeof item === 'string')) {
+      throw new Error('All entries in the addresses array must be strings');
+    }
+    addresses = parsed;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Failed to load addresses from ${args.addressesPath}: ${message}`);
+    process.exitCode = 1;
+    return;
+  }
   // CLI ships only the reference mock provider; wiring a real provider is
   // left to consumers embedding syncSanctionsToDenylist programmatically.
   const provider = new MockSanctionsProvider();
