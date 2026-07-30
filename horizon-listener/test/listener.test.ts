@@ -512,4 +512,137 @@ describe('HorizonListener', () => {
     // 3. Call mockStorage.save('new-cursor') after processing
     expect(getEvents).toHaveBeenCalledTimes(1);
   });
+
+  it('calls onEventFailure when onEvent throws, providing the failed event and error', async () => {
+    const eventA = makeEvent({ id: 'evt-1' });
+    const eventB = makeEvent({ id: 'evt-2', topic: ['denylist_removed'] });
+
+    const getEvents = jest
+      .fn()
+      .mockResolvedValueOnce({ events: [eventA, eventB], nextCursor: 'cursor-1' });
+
+    const eventSource: EventSource = { getEvents };
+    const eventError = new Error('event processing failed');
+    const onEvent = jest
+      .fn()
+      .mockImplementationOnce(() => {
+        throw eventError;
+      })
+      .mockImplementationOnce(() => {
+        // second event succeeds
+      });
+
+    const onEventFailure = jest.fn();
+    const logger = makeLogger();
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      onEventFailure,
+      logger,
+      sleep: async () => {
+        listener.stop();
+      },
+    });
+
+    await listener.start();
+
+    expect(onEvent).toHaveBeenCalledTimes(2);
+    expect(onEventFailure).toHaveBeenCalledTimes(1);
+    expect(onEventFailure).toHaveBeenCalledWith(eventA, eventError);
+    expect(onEvent).toHaveBeenNthCalledWith(1, eventA);
+    expect(onEvent).toHaveBeenNthCalledWith(2, eventB);
+  });
+
+  it('handles onEventFailure callback errors without interrupting the listener', async () => {
+    const eventA = makeEvent({ id: 'evt-1' });
+
+    const getEvents = jest
+      .fn()
+      .mockResolvedValueOnce({ events: [eventA], nextCursor: 'cursor-1' });
+
+    const eventSource: EventSource = { getEvents };
+    const eventError = new Error('event failed');
+    const failureError = new Error('failure handler failed');
+    const onEvent = jest.fn().mockImplementationOnce(() => {
+      throw eventError;
+    });
+
+    const onEventFailure = jest.fn().mockImplementationOnce(() => {
+      throw failureError;
+    });
+
+    const logger = makeLogger();
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      onEventFailure,
+      logger,
+      sleep: async () => {
+        listener.stop();
+      },
+    });
+
+    await listener.start();
+
+    expect(onEventFailure).toHaveBeenCalledWith(eventA, eventError);
+    expect(logger.error).toHaveBeenCalledWith(
+      'horizon-listener: onEventFailure handler threw',
+      failureError,
+    );
+  });
+
+  it('supports calling stop() during backoff delay to exit promptly', async () => {
+    const getEvents = jest.fn().mockRejectedValue(new Error('rpc down'));
+    const eventSource: EventSource = { getEvents };
+    const logger = makeLogger();
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent: jest.fn(),
+      logger,
+      maxRetries: 5,
+      backoffOptions: { jitter: false, baseMs: 1000, maxMs: 10000 },
+    });
+
+    const startPromise = listener.start();
+    startPromise.catch(() => {
+      // swallow rejection so Node doesn't warn about unhandled rejection
+    });
+
+    // Advance to trigger first failure and backoff
+    await jest.advanceTimersByTimeAsync(0);
+
+    // Call stop() while sleeping; should exit the loop
+    listener.stop();
+
+    // Should resolve (not reject) after a brief moment
+    await expect(startPromise).resolves.toBeUndefined();
+  });
+
+  it('interrupts poll interval sleep when stop() is called', async () => {
+    const eventA = makeEvent({ id: 'evt-1' });
+    const getEvents = jest.fn().mockResolvedValue({ events: [eventA], nextCursor: 'cursor-1' });
+    const eventSource: EventSource = { getEvents };
+    const onEvent = jest.fn();
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      pollIntervalMs: 10000,
+    });
+
+    const startPromise = listener.start();
+
+    // Let the first poll complete
+    await jest.advanceTimersByTimeAsync(0);
+
+    // Listener is now sleeping for pollIntervalMs (10000ms)
+    // Call stop() during the sleep
+    listener.stop();
+
+    // Should resolve immediately without waiting the full poll interval
+    await expect(startPromise).resolves.toBeUndefined();
+  });
 });

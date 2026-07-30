@@ -18,12 +18,13 @@ const consoleLogger: Logger = {
 export interface HorizonListenerOptions {
   eventSource: EventSource;
   onEvent: (event: RawContractEvent) => Promise<void> | void;
+  onEventFailure?: (event: RawContractEvent, error: unknown) => void | Promise<void>;
   pollIntervalMs?: number;
   maxRetries?: number;
   logger?: Logger;
   // Injectable so tests can drive time with Jest fake timers instead of waiting
   // on the real wall clock.
-  sleep?: (ms: number) => Promise<void>;
+  sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   // Injectable so tests can force deterministic (or jitter-free) backoff delays
   // instead of depending on Math.random.
   backoffOptions?: BackoffOptions;
@@ -40,16 +41,27 @@ export interface HorizonListenerOptions {
   mode?: 'poll' | 'stream';
 }
 
-const defaultSleep = (ms: number): Promise<void> =>
-  new Promise((resolve) => setTimeout(resolve, ms));
+const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted) {
+      reject(signal.reason ?? new Error('Sleep aborted'));
+      return;
+    }
+    const timeoutId = setTimeout(resolve, ms);
+    signal?.addEventListener('abort', () => {
+      clearTimeout(timeoutId);
+      reject(signal.reason ?? new Error('Sleep aborted'));
+    }, { once: true });
+  });
 
 export class HorizonListener {
   private readonly eventSource: EventSource;
   private readonly onEvent: (event: RawContractEvent) => Promise<void> | void;
+  private readonly onEventFailure?: (event: RawContractEvent, error: unknown) => void | Promise<void>;
   private readonly pollIntervalMs: number;
   private readonly maxRetries: number;
   private readonly logger: Logger;
-  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly backoffOptions: BackoffOptions;
   private readonly mode: 'poll' | 'stream';
 
@@ -57,10 +69,12 @@ export class HorizonListener {
   private running = false;
   private attempt = 0;
   private backfilling = false;
+  private sleepAbortController: AbortController | undefined;
 
   constructor(options: HorizonListenerOptions) {
     this.eventSource = options.eventSource;
     this.onEvent = options.onEvent;
+    this.onEventFailure = options.onEventFailure;
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
     this.maxRetries = options.maxRetries ?? 10;
     this.logger = options.logger ?? consoleLogger;
@@ -95,7 +109,17 @@ export class HorizonListener {
         }
 
         const delayMs = computeBackoffDelayMs(this.attempt, this.backoffOptions);
-        await this.sleep(delayMs);
+        this.sleepAbortController = new AbortController();
+        try {
+          await this.sleep(delayMs, this.sleepAbortController.signal);
+        } catch (sleepErr) {
+          if (this.sleepAbortController.signal.aborted) {
+            break;
+          }
+          throw sleepErr;
+        } finally {
+          this.sleepAbortController = undefined;
+        }
         continue;
       }
 
@@ -107,6 +131,13 @@ export class HorizonListener {
           await this.onEvent(event);
         } catch (err) {
           this.logger.error('horizon-listener: onEvent handler threw', err);
+          if (this.onEventFailure) {
+            try {
+              await this.onEventFailure(event, err);
+            } catch (failureErr) {
+              this.logger.error('horizon-listener: onEventFailure handler threw', failureErr);
+            }
+          }
         }
       }
 
@@ -135,11 +166,22 @@ export class HorizonListener {
         continue;
       }
 
-      await this.sleep(this.pollIntervalMs);
+      this.sleepAbortController = new AbortController();
+      try {
+        await this.sleep(this.pollIntervalMs, this.sleepAbortController.signal);
+      } catch (sleepErr) {
+        if (this.sleepAbortController.signal.aborted) {
+          break;
+        }
+        throw sleepErr;
+      } finally {
+        this.sleepAbortController = undefined;
+      }
     }
   }
 
   stop(): void {
     this.running = false;
+    this.sleepAbortController?.abort();
   }
 }
