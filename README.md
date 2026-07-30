@@ -200,3 +200,14 @@ data provider before relying on this package for real compliance decisions.
 ## License
 
 [MIT](./LICENSE)
+
+## Package-scoped issue labels
+
+This repo uses package-scoped labels to make triage easier. The intended labels are:
+
+- `package: sep10-auth` — issues specific to the `sep10-auth` package
+- `package: sanctions-oracle` — issues specific to the `sanctions-oracle` package
+- `package: horizon-listener` — issues specific to the `horizon-listener` package
+
+A helper script `scripts/apply-package-labels.js` can create these labels and apply them to open
+issues using simple heuristics. It requires a `GITHUB_TOKEN` with repo access to run.
