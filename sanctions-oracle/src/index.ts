@@ -50,3 +50,4 @@ export {
   type TracingOptions,
 } from './tracing';
 export { RateLimitedSanctionsProvider, RateLimitOptions } from './rateLimitedProvider';
+export type { Logger } from '@compliance-adapters/logger';

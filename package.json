@@ -7,6 +7,7 @@
     "compliance-adapters": "bin/compliance-adapters.js"
   },
   "workspaces": [
+    "logger",
     "sep10-auth",
     "sanctions-oracle",
     "horizon-listener",

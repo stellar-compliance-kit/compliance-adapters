@@ -7,6 +7,7 @@ import {
   nativeToScVal,
   rpc,
 } from '@stellar/stellar-sdk';
+import { type Logger, noopLogger, consoleLogger } from '@compliance-adapters/logger';
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
@@ -85,11 +86,6 @@ export type AuditLogger = (entry: AuditLogEntry) => void | Promise<void>;
 
 export interface DenylistWriter {
   addToDenylist(address: string): Promise<{ hash: string }>;
-}
-
-export interface Logger {
-  log(message: string): void;
-  error(message: string): void;
 }
 
 export interface SyncOptions {
@@ -200,6 +196,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     addresses,
     writer,
     dryRun = false,
+    logger = noopLogger,
     retry,
     cache,
     logger,
@@ -208,6 +205,8 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     metrics = new NoopMetricsRegistry(),
     tracer = new NoopTracer(),
   } = options;
+
+  logger.info('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
 
   const uniqueAddresses = Array.from(new Set(addresses));
   const flagged: string[] = [];
@@ -245,18 +244,23 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         failed.push(address);
       } finally {
         checked += 1;
-        if (logger && checked % progressInterval === 0) {
-          logger.log(`Progress: ${checked}/${uniqueAddresses.length} addresses checked`);
+        if (checked % progressInterval === 0) {
+          logger.debug(`sanctions-oracle: progress ${checked}/${uniqueAddresses.length} addresses checked`);
         }
       }
     },
     concurrency,
   );
 
+  logger.info('sanctions-oracle: screening complete', {
+    checked: addresses.length,
+    flagged: flagged.length,
+  });
+
   const written: string[] = [];
   if (dryRun) {
     for (const { address } of flaggedWithSource) {
-      console.log(`[dry-run] would call add_to_denylist(${address})`);
+      logger.info('sanctions-oracle: [dry-run] would call add_to_denylist', { address });
     }
   } else {
     for (const { address, source } of flaggedWithSource) {
@@ -278,6 +282,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         span.setAttribute('denylist_write.tx_hash', result.hash);
         span.end('ok');
         written.push(address);
+        logger.info('sanctions-oracle: address written to denylist', { address, hash: result.hash });
       } catch (err) {
         const durationMs = Date.now() - start;
         metrics.counter.inc('denylist_write', 'failure');
@@ -474,6 +479,10 @@ EXAMPLES:
 }
 
 export async function runCli(argv?: string[]): Promise<void> {
+  // The CLI entrypoint uses consoleLogger so dry-run output and errors are
+  // visible by default; programmatic callers should inject their own logger.
+  const logger = consoleLogger;
+
   const processArgv = argv ?? process.argv.slice(2);
   const args = parseArgs(processArgv);
 
@@ -483,7 +492,7 @@ export async function runCli(argv?: string[]): Promise<void> {
   }
 
   if (!args.addressesPath) {
-    console.error('sanctions-oracle: Missing required flag: --addresses <path-to-json-array>');
+    logger.error('sanctions-oracle: Missing required flag: --addresses <path-to-json-array>');
     process.exitCode = 1;
     return;
   }
@@ -518,13 +527,15 @@ export async function runCli(argv?: string[]): Promise<void> {
         },
       },
       dryRun: true,
+      logger,
     });
+    logger.info('sanctions-oracle: dry-run result', result);
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   if (!args.contractId || !args.rpcUrl || !args.networkPassphrase || !args.secretKey) {
-    console.error(
+    logger.error(
       'sanctions-oracle: Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, --secret-key (or pass --dry-run).',
     );
     process.exitCode = 1;
@@ -538,7 +549,7 @@ export async function runCli(argv?: string[]): Promise<void> {
     sourceKeypair: Keypair.fromSecret(args.secretKey),
   });
 
-  const result = await syncSanctionsToDenylist({ provider, addresses, writer, dryRun: false });
+  const result = await syncSanctionsToDenylist({ provider, addresses, writer, dryRun: false, logger });
   console.log(JSON.stringify(result, null, 2));
 }
 

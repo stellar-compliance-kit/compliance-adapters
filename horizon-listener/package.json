@@ -16,7 +16,8 @@
     "test": "jest"
   },
   "dependencies": {
-    "@stellar/stellar-sdk": "^16.0.1"
+    "@stellar/stellar-sdk": "^16.0.1",
+    "@compliance-adapters/logger": "*"
   },
   "devDependencies": {
     "typescript": "^5.5.4",

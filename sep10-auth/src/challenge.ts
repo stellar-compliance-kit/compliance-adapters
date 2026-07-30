@@ -1,4 +1,5 @@
 import { Keypair, Networks, StrKey, WebAuth } from '@stellar/stellar-sdk';
+import { type Logger, noopLogger } from '@compliance-adapters/logger';
 
 export class InvalidClientAddressError extends Error {
   constructor(address: string) {
@@ -28,6 +29,7 @@ export interface GenerateChallengeOptions {
    * fetch stellar.toml itself. Required when {@link GenerateChallengeOptions.clientDomain} is set.
    */
   clientSigningKey?: string;
+  logger?: Logger;
 }
 
 /**
@@ -56,17 +58,20 @@ export function generateChallenge(
     throw new InvalidClientAddressError(clientAddress);
   }
 
+  const logger = options.logger ?? noopLogger;
   const homeDomain = options.homeDomain ?? DEFAULT_HOME_DOMAIN;
   const webAuthDomain = options.webAuthDomain ?? homeDomain;
 
   if (!options.homeDomain && process.env.NODE_ENV === 'production') {
-    console.warn(
-      `[sep10-auth] generateChallenge is using the default homeDomain "${DEFAULT_HOME_DOMAIN}" ` +
+    logger.warn(
+      `sep10-auth: generateChallenge is using the default homeDomain "${DEFAULT_HOME_DOMAIN}" ` +
         'in a production environment. Pass an explicit `homeDomain` option matching your deployed domain.',
     );
   }
   const networkPassphrase = options.networkPassphrase ?? Networks.TESTNET;
   const timeoutSeconds = options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
+
+  logger.debug('sep10-auth: generating challenge', { clientAddress, homeDomain, webAuthDomain });
 
   const transactionXDR = WebAuth.buildChallengeTx(
     serverKeypair,
@@ -80,9 +85,12 @@ export function generateChallenge(
     options.clientSigningKey ?? null,
   );
 
+  const expiresAt = new Date(Date.now() + timeoutSeconds * 1000);
+  logger.info('sep10-auth: challenge generated', { clientAddress, expiresAt });
+
   return {
     transactionXDR,
     networkPassphrase,
-    expiresAt: new Date(Date.now() + timeoutSeconds * 1000),
+    expiresAt,
   };
 }

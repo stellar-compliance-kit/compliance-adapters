@@ -18,4 +18,9 @@ module.exports = {
       statements: 90,
     },
   },
+  // Point the shared logger package at its TypeScript source so ts-jest can
+  // compile it directly without requiring a separate build step.
+  moduleNameMapper: {
+    '^@compliance-adapters/logger$': '<rootDir>/../logger/src/index.ts',
+  },
 };

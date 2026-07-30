@@ -1,7 +1,7 @@
 import { RequestHandler } from 'express';
+import { type Logger, noopLogger } from '@compliance-adapters/logger';
 import { verifyChallenge, VerifyChallengeOptions } from './verify';
 import { RevocationStore } from './revocation';
-import { Logger } from './logger';
 
 declare global {
   namespace Express {
@@ -27,11 +27,17 @@ export interface Sep10MiddlewareOptions extends VerifyChallengeOptions {
 // re-verifying the challenge transaction on every request; that is out of
 // scope for this package.
 export function createSep10Middleware(options: Sep10MiddlewareOptions): RequestHandler {
+  const logger = options.logger ?? noopLogger;
+
   return async (req, res, next) => {
     const authHeader = req.header('Authorization') ?? '';
     const [scheme, token] = authHeader.split(' ');
 
     if (scheme !== 'Bearer' || !token) {
+      logger.warn('sep10-auth: missing or malformed bearer token', {
+        ip: req.ip,
+        path: req.path,
+      });
       res.status(401).json({ error: 'unauthorized', reason: 'missing bearer token' });
       return;
     }
@@ -39,7 +45,11 @@ export function createSep10Middleware(options: Sep10MiddlewareOptions): RequestH
     const result = verifyChallenge(token, options);
 
     if (!result.valid) {
-      options.logger?.warn('sep10-auth: challenge verification failed', result.error);
+      logger.warn('sep10-auth: challenge verification failed', {
+        reason: result.error,
+        ip: req.ip,
+        path: req.path,
+      });
       res.status(401).json({ error: 'unauthorized', reason: result.error });
       return;
     }
@@ -49,18 +59,19 @@ export function createSep10Middleware(options: Sep10MiddlewareOptions): RequestH
       try {
         revoked = await options.revocationStore.isRevoked(result.address);
       } catch (error) {
-        options.logger?.error('sep10-auth: revocation store lookup failed', error);
+        logger.error('sep10-auth: revocation store lookup failed', error);
         next(error);
         return;
       }
 
       if (revoked) {
-        options.logger?.warn('sep10-auth: address is revoked', result.address);
+        logger.warn('sep10-auth: address is revoked', { address: result.address });
         res.status(401).json({ error: 'unauthorized', reason: 'address revoked' });
         return;
       }
     }
 
+    logger.debug('sep10-auth: request authenticated', { address: result.address, path: req.path });
     req.stellarAddress = result.address;
     next();
   };

@@ -2,20 +2,11 @@ import type { EventSource, RawContractEvent } from './eventSource';
 import { computeBackoffDelayMs, type BackoffOptions } from './backoff';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { type AnyTracer, NoopTracer } from './tracing';
+import { type Logger, consoleLogger } from '@compliance-adapters/logger';
 
-export interface Logger {
-  debug: (...args: unknown[]) => void;
-  info: (...args: unknown[]) => void;
-  warn: (...args: unknown[]) => void;
-  error: (...args: unknown[]) => void;
-}
-
-const consoleLogger: Logger = {
-  debug: (...args: unknown[]) => console.debug(...args),
-  info: (...args: unknown[]) => console.info(...args),
-  warn: (...args: unknown[]) => console.warn(...args),
-  error: (...args: unknown[]) => console.error(...args),
-};
+// Re-export so existing consumers that imported Logger from this module
+// continue to compile without changes.
+export type { Logger };
 
 export interface HorizonListenerOptions {
   eventSource: EventSource;
