@@ -49,10 +49,19 @@ export interface SyncOptions {
   concurrency?: number;
 }
 
+/**
+ * Result of a sanctions sync operation.
+ */
 export interface SyncResult {
+  /** Total number of candidate addresses checked against the provider. */
   checked: number;
+  /** Addresses flagged by the sanctions provider. */
   flagged: string[];
+  /** Addresses successfully written to the denylist (empty if dryRun is true). */
   written: string[];
+  /** Addresses whose provider check failed on every retry attempt. */
+  failed: string[];
+  /** Whether this was a dry-run (read-only) operation. */
   dryRun: boolean;
 }
 
@@ -130,12 +139,19 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
 
   const written: string[] = [];
   if (dryRun) {
-    for (const address of flagged) {
+    for (const { address } of flaggedWithSource) {
       console.log(`[dry-run] would call add_to_denylist(${address})`);
     }
   } else {
-    for (const address of flagged) {
-      await writer.addToDenylist(address);
+    for (const { address, source } of flaggedWithSource) {
+      // Call writer with extended interface if available
+      const writerExt = writer as DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> };
+      let result: { hash: string; auditLog?: AuditLogEntry };
+      if (writerExt.addToDenylistWithSource) {
+        result = await writerExt.addToDenylistWithSource(address, source);
+      } else {
+        result = await writer.addToDenylist(address);
+      }
       written.push(address);
     }
   }
@@ -144,6 +160,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     checked: addresses.length,
     flagged,
     written,
+    failed,
     dryRun,
   };
 }
@@ -213,6 +230,35 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
       const err = lastError instanceof Error ? lastError.message : String(lastError);
       throw new Error(`Failed to send transaction after ${maxRetries} attempts: ${err}`);
     },
+    async addToDenylistWithSource(address: string, source: string): Promise<{ hash: string; auditLog?: AuditLogEntry }> {
+      const account = await server.getAccount(sourceKeypair.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase,
+      })
+        .addOperation(contract.call('add_to_denylist', nativeToScVal(address, { type: 'address' })))
+        .setTimeout(30)
+        .build();
+
+      const prepared = await server.prepareTransaction(tx);
+      prepared.sign(sourceKeypair);
+
+      const sendResult = await server.sendTransaction(prepared);
+
+      const auditEntry: AuditLogEntry = {
+        address,
+        timestamp: new Date().toISOString(),
+        source,
+        txHash: sendResult.hash,
+      };
+
+      if (auditLogger) {
+        await auditLogger(auditEntry);
+      }
+
+      return { hash: sendResult.hash, auditLog: auditEntry };
+    },
   };
 }
 
@@ -255,7 +301,7 @@ function parseArgs(argv: string[]): CliArgs {
   return args;
 }
 
-async function runCli(): Promise<void> {
+export async function runCli(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
 
   if (!args.addressesPath) {

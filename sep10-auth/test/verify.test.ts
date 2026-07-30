@@ -40,6 +40,30 @@ describe('verifyChallenge', () => {
     expect(result.error).toBeUndefined();
   });
 
+  it('accepts a challenge when homeDomains is an array containing the challenge home domain', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+
+    const challenge = generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+      homeDomain: 'domain-a.com',
+      webAuthDomain: 'domain-a.com',
+      networkPassphrase: Networks.TESTNET,
+    });
+
+    const signedXDR = signAsClient(challenge.transactionXDR, Networks.TESTNET, clientKeypair);
+
+    const result = verifyChallenge(signedXDR, {
+      serverAccountId: serverKeypair.publicKey(),
+      networkPassphrase: Networks.TESTNET,
+      homeDomains: ['domain-a.com', 'domain-b.com'],
+      webAuthDomain: 'domain-a.com',
+    });
+
+    expect(result.valid).toBe(true);
+    expect(result.address).toBe(clientKeypair.publicKey());
+    expect(result.error).toBeUndefined();
+  });
+
   it('rejects a challenge whose timebounds have expired', () => {
     // buildChallengeTx always sets minTime to the real "now" at build time, so
     // an already-expired transaction can't be constructed with a negative

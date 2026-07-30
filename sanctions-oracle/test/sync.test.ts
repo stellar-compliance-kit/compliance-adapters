@@ -4,6 +4,7 @@ import { SanctionsProvider } from '../src/SanctionsProvider';
 
 const FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
 const CLEAN_ADDRESS = 'GDNOTPRESENTINANYMOCKWATCHLISTAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const instantSleep = async (): Promise<void> => {};
 
 function makeFakeWriter(): DenylistWriter & { addToDenylist: jest.Mock } {
   return {

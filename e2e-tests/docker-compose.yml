@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  soroban-preview:
+    image: stellar/soroban-preview:latest
+    ports:
+      - '8000:8000'
+    environment:
+      # Soroban RPC port
+      RPC_PORT: 8000
+      # Faster block times for testing (optional; defaults to ~5s)
+      STELLAR_CORE_CATCHUP_COMPLETE: 'true'
+    healthcheck:
+      test:
+        - CMD
+        - curl
+        - -f
+        - http://localhost:8000/soroban/rpc
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 10s
+    volumes:
+      # Mount stellar core storage to persist state across restarts (optional)
+      - soroban-data:/opt/stellar-core/data
+    networks:
+      - stellar-test
+
+volumes:
+  soroban-data:
+
+networks:
+  stellar-test:
+    driver: bridge

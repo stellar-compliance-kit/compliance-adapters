@@ -30,9 +30,15 @@ by invoking its `add_to_denylist(address)` contract function.
   `DenylistWriter` interface, so the sync logic can be unit tested with a
   fake writer, with no live network required.
 
-This package does **not** implement real sanctions data fetching, retry
-logic, or a provider registry — those are tracked as separate future
-issues.
+This package does **not** implement real sanctions data fetching — that is
+tracked as a separate future issue.
+
+Provider calls made during a sync (`provider.checkAddress`) are wrapped in
+a retry-with-backoff helper (`withRetry`, see `src/retry.ts`): on failure
+they retry with exponential backoff up to a configurable number of
+attempts (`SyncOptions.retry`, default 3 attempts). If an address's
+provider check still fails after exhausting all attempts, that address is
+recorded in `SyncResult.failed` instead of aborting the whole sync run.
 
 ## The `SanctionsProvider` interface
 
@@ -60,6 +66,91 @@ class MyProvider implements SanctionsProvider {
 Anything conforming to this interface — a REST client, a cache in front of
 multiple upstream lists, a local CSV loader — can be passed to
 `syncSanctionsToDenylist` in place of `MockSanctionsProvider`.
+
+## Running multiple providers with `ProviderRegistry`
+
+Real deployments often want to check an address against more than one
+source at once (e.g. an OFAC-style list, a regional list, and an internal
+denylist) rather than a single `SanctionsProvider`. `ProviderRegistry` holds
+several providers, queries all of them, and resolves disagreements according
+to a configurable policy. It implements `SanctionsProvider` itself, so it's
+a drop-in replacement anywhere a single provider is expected — including
+`syncSanctionsToDenylist`:
+
+```ts
+import { ProviderRegistry, syncSanctionsToDenylist } from 'sanctions-oracle';
+
+const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
+registry.register('ofac-style', ofacProvider);
+registry.register('regional-list', regionalProvider);
+registry.register('internal-denylist', internalProvider);
+
+await syncSanctionsToDenylist({ provider: registry, addresses, writer });
+```
+
+Supported conflict-resolution policies: `'any-flag-wins'` (flagged if any
+provider flags it), `'majority-vote'` (flagged if a majority of responding
+providers flag it, with a configurable tie-break), and
+`'priority-override'` (the highest-priority registered provider's answer
+wins outright). See
+[`docs/provider-registry-design.md`](./docs/provider-registry-design.md)
+for the full design, including how provider errors are handled.
+
+## Configuration
+
+Copy the root [`.env.example`](../.env.example) to `.env` at the repo root and
+fill in the `sanctions-oracle` variables before running a live sync:
+
+| Variable | CLI flag equivalent | Description |
+|---|---|---|
+| `STELLAR_RPC_URL` | `--rpc-url` | Soroban RPC endpoint |
+| `STELLAR_NETWORK_PASSPHRASE` | `--network-passphrase` | Must match the network the RPC endpoint serves |
+| `DENYLIST_GATE_CONTRACT_ID` | `--contract-id` | Deployed `denylist-gate` contract to write flagged addresses into |
+| `SANCTIONS_SOURCE_SECRET` | `--secret-key` | Signing keypair that funds and signs denylist transactions |
+
+See the comments in `.env.example` for allowed values and testnet guidance.
+
+Dry-run mode (`--dry-run`) does not require `DENYLIST_GATE_CONTRACT_ID` or
+`SANCTIONS_SOURCE_SECRET` — it only logs planned calls without touching the network.
+
+## End-to-end example: custom provider with syncSanctionsToDenylist
+
+This example shows how to wire a custom `SanctionsProvider` with
+`syncSanctionsToDenylist` to check a list of addresses and submit them to
+a denylist contract:
+
+```ts
+import { syncSanctionsToDenylist, createRpcDenylistWriter, SanctionsProvider } from 'sanctions-oracle';
+import { Keypair } from '@stellar/stellar-sdk';
+
+// 1. Implement your custom SanctionsProvider
+// (For a realistic REST-backed example, see the @example block in src/SanctionsProvider.ts)
+class MyCustomProvider implements SanctionsProvider {
+  async checkAddress(address: string) {
+    // Your watchlist logic here
+    const flagged = await myWatchlistApi.lookup(address);
+    return { flagged: Boolean(flagged), source: 'my-watchlist-api' };
+  }
+}
+
+// 2. Create a writer that submits to your denylist contract
+const writer = createRpcDenylistWriter({
+  rpcUrl: 'https://soroban-testnet.stellar.org',
+  networkPassphrase: 'Test SDF Network ; September 2015',
+  contractId: 'CABCDEF...',
+  sourceKeypair: Keypair.fromSecret(process.env.SECRET_KEY!),
+});
+
+// 3. Sync: check addresses and write flagged ones to denylist
+const result = await syncSanctionsToDenylist({
+  provider: new MyCustomProvider(),
+  addresses: ['GABC...', 'GDEF...'],
+  writer,
+  dryRun: false,
+});
+
+console.log(`Checked ${result.checked}, flagged ${result.flagged.length}, wrote ${result.written.length}`);
+```
 
 ## Running the sync script
 
@@ -134,6 +225,49 @@ flagged address using `@stellar/stellar-sdk`'s `Contract`,
   points at, will fail when the transaction is simulated/prepared.
   Double check the contract ID and that it's deployed on the same
   network you're targeting.
+- **Sequence number errors (`tx_bad_seq` or similar)** — the error
+  message typically includes `bad sequence` or an HTTP 400 with
+  `transaction failed` during `sendTransaction`. This happens when the
+  source account's sequence number in the transaction doesn't match what
+  the network expects. Common causes:
+  - The source account is being used by another process or script
+    simultaneously (e.g. another sync run, a bot, or a manual wallet
+    transaction), causing sequence numbers to drift.
+  - A previous transaction from the same account hasn't been fully
+    ingested by the network yet before the next one is submitted.
+
+  **Fix:** ensure only one instance of the sync script runs against a
+  given source account at a time. If you need to run concurrent syncs,
+  use separate source accounts. If you're submitting many transactions
+  in a loop (one per flagged address), add a small delay between
+  submissions or poll `server.getTransaction(hash)` and wait for
+  `status === 'SUCCESS'` before submitting the next one.
+- **Rate limiting from the RPC endpoint (HTTP 429 or `ECONNRESET`)** —
+  public RPC endpoints (including `https://soroban-testnet.stellar.org`)
+  often enforce rate limits. Symptoms include:
+  - `HTTP 429 Too Many Requests` responses.
+  - Connection resets (`ECONNRESET`, `socket hang up`) mid-sync when
+    submitting many transactions in quick succession.
+  - Requests hanging or timing out after a batch of successful calls.
+
+  **Fix:** first run a `--dry-run` to confirm that address checking
+  works independently of submission throughput issues. Then add a
+  delay between transaction submissions (e.g. 1–2 seconds) to stay
+  within rate limits. For production workloads, consider using a
+  dedicated RPC provider with higher rate limits, or self-hosting an
+  RPC node.
+- **Clock skew causing transaction submission failures** — if the local
+  machine's clock is significantly out of sync with the Stellar network,
+  transactions may be rejected because their time bounds don't align
+  with the current ledger close time. The error may appear as a generic
+  `sendTransaction` failure or a `transaction failed` status with no
+  obvious explanation in the result codes.
+
+  **Fix:** synchronize your system clock with NTP. On most Linux
+  systems: `sudo ntpdate -u pool.ntp.org` or `sudo timedatectl
+  set-ntp true`. On macOS, ensure "Set date and time automatically" is
+  enabled in System Settings. A clock drift of more than 30 seconds is
+  likely to cause issues.
 
 ## Related
 

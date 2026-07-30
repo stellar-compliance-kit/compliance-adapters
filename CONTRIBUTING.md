@@ -56,5 +56,5 @@ Use the issue templates under **New Issue** — one for bug reports, one for fea
 ## Security
 
 Please do not open a public issue for suspected security vulnerabilities in the sanctions-oracle
-sync path, SEP-10 verification logic, or webhook handling. See [SECURITY.md](./SECURITY.md) (once
-published) or contact the maintainers directly.
+sync path, SEP-10 verification logic, or webhook handling. See [SECURITY.md](./SECURITY.md) for
+each package's trust model and how to report a vulnerability privately.
