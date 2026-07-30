@@ -37,6 +37,11 @@ export class HttpWebhookSender implements WebhookSender {
     this.maxRetries = options.maxRetries ?? 3;
   }
 
+  /**
+   * Sends an event to the configured webhook URL.
+   * @throws {Error} When the HTTP response is not OK (status >= 400).
+   * Consumers should handle this error with retry logic or fallback behavior.
+   */
   async send(event: RawContractEvent): Promise<void> {
     const body = JSON.stringify({ event });
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };

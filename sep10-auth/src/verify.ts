@@ -78,6 +78,6 @@ export function verifyChallenge(
   return {
     valid: false,
     address: '',
-    error: lastError instanceof Error ? lastError.message : String(lastError),
+    error: `sep10-auth: ${lastError instanceof Error ? lastError.message : String(lastError)}`,
   };
 }
