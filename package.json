@@ -15,6 +15,7 @@
     "build": "npm run build --workspaces --if-present",
     "test": "npm run test --workspaces --if-present",
     "lint": "eslint . --ext .ts",
+    "check:license": "node scripts/check-license-headers.js",
     "format": "prettier --check .",
     "format:write": "prettier --write ."
   },

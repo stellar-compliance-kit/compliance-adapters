@@ -28,6 +28,9 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Check License Headers
+        run: npm run check:license
+
       - name: Build
         run: npm run build
 

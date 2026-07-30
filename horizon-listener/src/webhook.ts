@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 import type { RawContractEvent } from './eventSource';
 
 export interface WebhookSender {

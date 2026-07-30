@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
  * Implement this interface to plug an external sanctions/watchlist data
  * source into the denylist-gate sync flow (see `sync.ts`).
  *
