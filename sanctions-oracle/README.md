@@ -61,6 +61,173 @@ Anything conforming to this interface — a REST client, a cache in front of
 multiple upstream lists, a local CSV loader — can be passed to
 `syncSanctionsToDenylist` in place of `MockSanctionsProvider`.
 
+## Local / testnet walkthrough
+
+This section walks through everything needed to run a live (non-dry-run) sync against a local or public Soroban testnet: funding an account, deploying the `denylist-gate` contract, and obtaining the `--rpc-url`, `--contract-id`, and `--secret-key` values the CLI requires.
+
+### Prerequisites
+
+- [Node.js ≥ 20](https://nodejs.org/)
+- [Stellar CLI](https://developers.stellar.org/docs/tools/developer-tools/cli/stellar-cli) — install with:
+  ```sh
+  cargo install --locked stellar-cli --features opt
+  ```
+  Or via the pre-built binaries on the [releases page](https://github.com/stellar/stellar-cli/releases).
+- (Optional) [Docker](https://www.docker.com/) — only needed if you want a fully local network instead of the public testnet.
+
+### Option A — Public Stellar testnet (quickest)
+
+The Stellar Development Foundation runs a free, public Soroban-compatible testnet. No local Docker setup required.
+
+```
+RPC URL:            https://soroban-testnet.stellar.org
+Network passphrase: Test SDF Network ; September 2015
+```
+
+#### 1. Generate a funded account
+
+```sh
+# Generate a new keypair
+stellar keys generate --global alice --network testnet
+
+# Print the secret key (keep this safe — treat it like a password)
+stellar keys show alice
+
+# The public key / address
+stellar keys address alice
+```
+
+Friendbot automatically funds any newly generated testnet keypair when you use `--network testnet` with the Stellar CLI. If you created the keypair another way, fund it manually:
+
+```sh
+curl "https://friendbot.stellar.org/?addr=$(stellar keys address alice)"
+```
+
+Verify the account exists and has a balance:
+
+```sh
+stellar account balances --account-id $(stellar keys address alice) --network testnet
+```
+
+#### 2. Deploy the `denylist-gate` contract
+
+> The `denylist-gate` Soroban contract lives in the [compliance-primitives](https://github.com/stellar-compliance-kit/compliance-primitives) repo. Clone it and build the `.wasm` first:
+>
+> ```sh
+> git clone https://github.com/stellar-compliance-kit/compliance-primitives
+> cd compliance-primitives
+> cargo build --release --target wasm32-unknown-unknown
+> ```
+>
+> The compiled artifact will be at something like
+> `target/wasm32-unknown-unknown/release/denylist_gate.wasm`.
+
+Deploy the contract to testnet and capture the contract ID:
+
+```sh
+CONTRACT_ID=$(stellar contract deploy \
+  --wasm path/to/denylist_gate.wasm \
+  --source alice \
+  --network testnet)
+
+echo "Contract ID: $CONTRACT_ID"
+```
+
+The CLI prints the contract ID (a `C…` address). Keep it — this is your `--contract-id` value.
+
+#### 3. Build the CLI
+
+From inside the `sanctions-oracle` package:
+
+```sh
+npm install
+npm run build
+```
+
+#### 4. Prepare an addresses file
+
+Create a JSON file containing the Stellar addresses you want to check:
+
+```json
+["GABC...", "GDEF..."]
+```
+
+```sh
+echo '["GABC...","GDEF..."]' > addresses.json
+```
+
+#### 5. Run a live sync
+
+```sh
+node dist/sync.js \
+  --addresses ./addresses.json \
+  --rpc-url https://soroban-testnet.stellar.org \
+  --network-passphrase "Test SDF Network ; September 2015" \
+  --contract-id "$CONTRACT_ID" \
+  --secret-key "$(stellar keys show alice)"
+```
+
+The CLI submits one `add_to_denylist(address)` transaction per flagged address and prints a JSON summary, for example:
+
+```json
+{
+  "checked": 2,
+  "flagged": ["GABC..."],
+  "written": ["GABC..."],
+  "dryRun": false
+}
+```
+
+---
+
+### Option B — Fully local network (no public testnet)
+
+Use `stellar network start` (backed by Docker) to run an isolated local environment:
+
+```sh
+# Start a local Stellar/Soroban node (runs in the background)
+stellar network start local
+
+# The local RPC endpoint and passphrase
+#   RPC URL:            http://localhost:8000/soroban/rpc
+#   Network passphrase: Standalone Network ; February 2017
+```
+
+Generate and fund a local account:
+
+```sh
+stellar keys generate --global alice --network local
+
+# Friendbot for the local network
+curl "http://localhost:8000/friendbot?addr=$(stellar keys address alice)"
+```
+
+Deploy and run exactly as in Option A, substituting:
+
+```sh
+--rpc-url http://localhost:8000/soroban/rpc \
+--network-passphrase "Standalone Network ; February 2017"
+```
+
+Stop the local node when done:
+
+```sh
+stellar network stop local
+```
+
+---
+
+### Quick-reference: values at a glance
+
+| Flag | Public testnet | Local network |
+|---|---|---|
+| `--rpc-url` | `https://soroban-testnet.stellar.org` | `http://localhost:8000/soroban/rpc` |
+| `--network-passphrase` | `Test SDF Network ; September 2015` | `Standalone Network ; February 2017` |
+| `--contract-id` | output of `stellar contract deploy …` | output of `stellar contract deploy …` |
+| `--secret-key` | output of `stellar keys show <name>` | output of `stellar keys show <name>` |
+
+---
+
 ## Running the sync script
 
 Once built (`npm run build`), the sync script is available as the
