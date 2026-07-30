@@ -49,3 +49,4 @@ export {
   type TracingContext,
   type TracingOptions,
 } from './tracing';
+export { RateLimitedSanctionsProvider, RateLimitOptions } from './rateLimitedProvider';
