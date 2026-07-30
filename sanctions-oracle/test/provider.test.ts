@@ -40,7 +40,9 @@ describe('CsvSanctionsProvider', () => {
 
   it('flags a known CSV watchlist address', async () => {
     const provider = new CsvSanctionsProvider(csvPath);
-    const result = await provider.checkAddress('GHBRPOIGF3CBFNOBM2O4RAK3VRJNVGFYGWWQC5HYFSXMECOSFOGYR5XK');
+    const result = await provider.checkAddress(
+      'GHBRPOIGF3CBFNOBM2O4RAK3VRJNVGFYGWWQC5HYFSXMECOSFOGYR5XK',
+    );
     expect(result.flagged).toBe(true);
     expect(result.source).toBe('csv-watchlist-v1');
   });
@@ -54,7 +56,7 @@ describe('CsvSanctionsProvider', () => {
 
   it('throws an error when CSV file does not exist', () => {
     expect(() => new CsvSanctionsProvider('/nonexistent/path.csv')).toThrow(
-      'CSV file not found at path: /nonexistent/path.csv'
+      'CSV file not found at path: /nonexistent/path.csv',
     );
   });
 });

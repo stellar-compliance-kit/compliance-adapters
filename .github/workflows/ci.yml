@@ -34,6 +34,9 @@ jobs:
         # Fails the build if any file would be reformatted.
         run: npm run format:check
 
+      - name: Check License Headers
+        run: npm run check:license
+
       - name: Build
         run: npm run build
 

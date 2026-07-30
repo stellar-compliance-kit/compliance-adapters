@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 import { Networks, Operation, WebAuth } from '@stellar/stellar-sdk';
 
 export interface VerifyChallengeOptions {

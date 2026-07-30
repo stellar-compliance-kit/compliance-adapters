@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 import { createHmac } from 'node:crypto';
 import { computeBackoffDelayMs } from './backoff';
 import type { RawContractEvent } from './eventSource';
