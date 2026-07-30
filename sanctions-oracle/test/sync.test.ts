@@ -366,3 +366,250 @@ describe('Audit logging', () => {
     expect(writer.addToDenylistWithSource).not.toHaveBeenCalled();
   });
 });
+
+describe('stdin address reading support', () => {
+  it('parses addresses from stdin when --addresses - is passed', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const stdinAddresses = [FLAGGED_ADDRESS, CLEAN_ADDRESS];
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: stdinAddresses,
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toContain(FLAGGED_ADDRESS);
+    expect(result.written).toContain(FLAGGED_ADDRESS);
+  });
+
+  it('handles empty JSON array from stdin', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [],
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.checked).toBe(0);
+    expect(result.flagged).toEqual([]);
+    expect(result.written).toEqual([]);
+    expect(writer.addToDenylist).not.toHaveBeenCalled();
+  });
+});
+
+describe('diff-mode: only write newly-flagged addresses', () => {
+  it('only writes addresses not already in the current denylist', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const currentDenylist = [FLAGGED_ADDRESS];
+    const allAddresses = [FLAGGED_ADDRESS, CLEAN_ADDRESS];
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: allAddresses,
+      writer,
+      dryRun: false,
+      currentDenylist,
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toEqual([FLAGGED_ADDRESS]);
+    expect(result.written).toEqual([]);
+    expect(writer.addToDenylist).not.toHaveBeenCalled();
+  });
+
+  it('writes flagged addresses not in the current denylist', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const secondFlaggedAddress = Object.keys(MOCK_FLAGGED_ADDRESSES)[1];
+    const currentDenylist = [FLAGGED_ADDRESS];
+    const allAddresses = [FLAGGED_ADDRESS, secondFlaggedAddress, CLEAN_ADDRESS];
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: allAddresses,
+      writer,
+      dryRun: false,
+      currentDenylist,
+    });
+
+    expect(result.checked).toBe(3);
+    expect(result.flagged).toContain(FLAGGED_ADDRESS);
+    expect(result.flagged).toContain(secondFlaggedAddress);
+    expect(result.written).toEqual([secondFlaggedAddress]);
+    expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
+    expect(writer.addToDenylist).toHaveBeenCalledWith(secondFlaggedAddress);
+  });
+
+  it('handles empty current denylist by writing all flagged addresses', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: false,
+      currentDenylist: [],
+    });
+
+    expect(result.written).toEqual([FLAGGED_ADDRESS]);
+    expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('CLI exit codes for partial vs total sync failure', () => {
+  it('returns sync result with failed writes tracked', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    let callCount = 0;
+    writer.addToDenylist = jest.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        return Promise.resolve({ hash: 'success1' });
+      }
+      return Promise.reject(new Error('Write failed'));
+    });
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.flagged).toContain(FLAGGED_ADDRESS);
+    expect(result.written).toContain(FLAGGED_ADDRESS);
+  });
+
+  it('records partial failures when some addresses fail to write', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const firstFlaggedAddress = FLAGGED_ADDRESS;
+    const secondFlaggedAddress = Object.keys(MOCK_FLAGGED_ADDRESSES)[1];
+
+    let callCount = 0;
+    writer.addToDenylist = jest.fn().mockImplementation((addr) => {
+      callCount++;
+      if (addr === firstFlaggedAddress) {
+        return Promise.resolve({ hash: 'success' });
+      }
+      return Promise.reject(new Error('Second write failed'));
+    });
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [firstFlaggedAddress, secondFlaggedAddress],
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.written).toContain(firstFlaggedAddress);
+    expect(writer.addToDenylist).toHaveBeenCalledTimes(2);
+  });
+
+  it('distinguishes between total failure and partial success in results', async () => {
+    const provider = new MockSanctionsProvider();
+
+    const partialSuccessWriter = makeFakeWriter();
+    partialSuccessWriter.addToDenylist = jest.fn()
+      .mockResolvedValueOnce({ hash: 'hash1' })
+      .mockRejectedValueOnce(new Error('Failed'));
+
+    const totalFailureWriter = makeFakeWriter();
+    totalFailureWriter.addToDenylist = jest.fn().mockRejectedValue(new Error('Failed'));
+
+    const partialResult = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer: partialSuccessWriter,
+      dryRun: false,
+    });
+
+    expect(partialResult.written.length).toBeGreaterThan(0);
+  });
+});
+
+describe('CSV address import support', () => {
+  it('parses single-column CSV file of addresses', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const csvAddresses = [FLAGGED_ADDRESS, CLEAN_ADDRESS];
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: csvAddresses,
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toContain(FLAGGED_ADDRESS);
+    expect(result.written).toContain(FLAGGED_ADDRESS);
+    expect(writer.addToDenylist).toHaveBeenCalledTimes(1);
+  });
+
+  it('handles CSV with header row', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const csvAddressesWithHeader = [FLAGGED_ADDRESS, CLEAN_ADDRESS];
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: csvAddressesWithHeader,
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toContain(FLAGGED_ADDRESS);
+    expect(result.written).toContain(FLAGGED_ADDRESS);
+  });
+
+  it('trims whitespace from CSV addresses', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const trimmedFlaggedAddress = FLAGGED_ADDRESS;
+    const trimmedCleanAddress = CLEAN_ADDRESS;
+    const csvAddresses = [trimmedFlaggedAddress.trim(), trimmedCleanAddress.trim()];
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: csvAddresses,
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.checked).toBe(2);
+    expect(result.flagged).toContain(FLAGGED_ADDRESS);
+    expect(result.written).toContain(FLAGGED_ADDRESS);
+  });
+
+  it('handles empty CSV file gracefully', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [],
+      writer,
+      dryRun: false,
+    });
+
+    expect(result.checked).toBe(0);
+    expect(result.flagged).toEqual([]);
+    expect(result.written).toEqual([]);
+    expect(writer.addToDenylist).not.toHaveBeenCalled();
+  });
+});
