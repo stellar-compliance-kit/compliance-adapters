@@ -15,7 +15,8 @@
     "examples/full-stack-demo"
   ],
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=20.0.0",
+    "npm": ">=10.0.0"
   },
   "scripts": {
     "build": "npm run build --workspaces --if-present",
