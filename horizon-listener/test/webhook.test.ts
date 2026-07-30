@@ -208,4 +208,121 @@ describe('HttpWebhookSender', () => {
     expect(sentEvent.ledger).toBe(originalEvent.ledger);
     expect(sentEvent.topic).toEqual(originalEvent.topic);
   });
+
+  it('includes URL and status code in error message when response is not ok', async () => {
+    const url = 'http://localhost:9999/webhook';
+    const status = 503;
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status });
+    const sender = new HttpWebhookSender({ url, fetchImpl });
+
+    const error = await sender.send(makeEvent()).catch((e) => e);
+    expect(error.message).toContain(url);
+    expect(error.message).toContain(String(status));
+  });
+
+  it('respects timeoutMs option by passing AbortSignal to fetch', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const fetchImpl = jest.fn().mockImplementation((url, init) => {
+      capturedSignal = init.signal;
+      return Promise.resolve({ ok: true });
+    });
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      timeoutMs: 5000,
+    });
+
+    await sender.send(makeEvent());
+
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal?.aborted).toBe(false);
+  });
+
+  it('does not pass AbortSignal when timeoutMs is not set', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    const fetchImpl = jest.fn().mockImplementation((url, init) => {
+      capturedSignal = init.signal;
+      return Promise.resolve({ ok: true });
+    });
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+    });
+
+    await sender.send(makeEvent());
+
+    expect(capturedSignal).toBeUndefined();
+  });
+
+  it('clears the timeout handle after successful send', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: true });
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      timeoutMs: 5000,
+    });
+
+    // Should complete without hanging
+    await expect(sender.send(makeEvent())).resolves.toBeUndefined();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries on transient failures with backoff', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockResolvedValueOnce({ ok: false, status: 502 })
+      .mockResolvedValueOnce({ ok: true });
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      maxRetries: 3,
+    });
+
+    await sender.send(makeEvent());
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('gives up after maxRetries attempts', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status: 503 });
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      maxRetries: 2,
+    });
+
+    await expect(sender.send(makeEvent())).rejects.toThrow(/status 503/);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3); // initial + 2 retries
+  });
+
+  it('does not retry on success', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: true });
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      maxRetries: 3,
+    });
+
+    await sender.send(makeEvent());
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('defaults maxRetries to 3', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status: 503 });
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+    });
+
+    await expect(sender.send(makeEvent())).rejects.toThrow();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(4); // initial + 3 default retries
+  });
 });
