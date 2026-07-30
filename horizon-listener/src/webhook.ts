@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { computeBackoffDelayMs } from './backoff';
 import type { RawContractEvent } from './eventSource';
+import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 
 export interface WebhookSender {
   send(event: RawContractEvent): Promise<void>;
@@ -18,6 +19,12 @@ export interface HttpWebhookSenderOptions {
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
   maxRetries?: number;
+  /**
+   * Optional metrics registry.  Pass a `MetricsRegistry` instance to record
+   * per-call counters and latency histograms for the `webhook` phase.
+   * Defaults to a no-op registry — zero overhead when omitted.
+   */
+  metrics?: AnyMetricsRegistry;
 }
 
 export class HttpWebhookSender implements WebhookSender {
@@ -26,6 +33,7 @@ export class HttpWebhookSender implements WebhookSender {
   private readonly fetchImpl: typeof fetch;
   private readonly timeoutMs: number | undefined;
   private readonly maxRetries: number;
+  private readonly metrics: AnyMetricsRegistry;
 
   constructor(options: HttpWebhookSenderOptions) {
     this.url = options.url;
@@ -35,6 +43,7 @@ export class HttpWebhookSender implements WebhookSender {
     this.fetchImpl = options.fetchImpl ?? fetch;
     this.timeoutMs = options.timeoutMs;
     this.maxRetries = options.maxRetries ?? 3;
+    this.metrics = options.metrics ?? new NoopMetricsRegistry();
   }
 
   /**
@@ -58,6 +67,7 @@ export class HttpWebhookSender implements WebhookSender {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
       }
 
+      const start = Date.now();
       try {
         const controller = this.timeoutMs ? new AbortController() : undefined;
         let timeoutHandle: NodeJS.Timeout | undefined;
@@ -74,12 +84,18 @@ export class HttpWebhookSender implements WebhookSender {
             signal: controller?.signal,
           });
 
+          const durationMs = Date.now() - start;
+
           if (!response.ok) {
+            this.metrics.counter.inc('webhook', 'failure');
+            this.metrics.histogram.observe('webhook', durationMs);
             throw new Error(
               `horizon-listener: webhook POST to ${this.url} failed with status ${response.status}`,
             );
           }
 
+          this.metrics.counter.inc('webhook', 'success');
+          this.metrics.histogram.observe('webhook', durationMs);
           return;
         } finally {
           if (timeoutHandle) {
@@ -87,6 +103,11 @@ export class HttpWebhookSender implements WebhookSender {
           }
         }
       } catch (error) {
+        if (!(error instanceof Error && error.message.includes('failed with status'))) {
+          const durationMs = Date.now() - start;
+          this.metrics.counter.inc('webhook', 'failure');
+          this.metrics.histogram.observe('webhook', durationMs);
+        }
         lastError = error instanceof Error ? error : new Error(String(error));
         if (attempt === this.maxRetries) {
           throw lastError;

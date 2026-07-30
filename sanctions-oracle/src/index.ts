@@ -25,3 +25,14 @@ export {
   ProviderErrorOutcome,
   RegistryCheckResult,
 } from './ProviderRegistry';
+export {
+  MetricsRegistry,
+  NoopMetricsRegistry,
+  DEFAULT_HISTOGRAM_BUCKETS,
+  type AnyMetricsRegistry,
+  type Counter,
+  type Histogram,
+  type SanctionsPhase,
+  type Outcome,
+  type MetricsRegistryOptions,
+} from './metrics';
