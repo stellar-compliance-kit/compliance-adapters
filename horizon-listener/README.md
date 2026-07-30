@@ -20,6 +20,24 @@ npm install
 (This package is part of the `compliance-adapters` npm workspace; run install
 from the repo root.)
 
+## Configuration
+
+Copy the root [`.env.example`](../.env.example) to `.env` at the repo root and
+fill in the `horizon-listener` variables before running the service:
+
+| Variable | Description |
+|---|---|
+| `STELLAR_RPC_URL` | Soroban RPC endpoint to poll for contract events |
+| `STELLAR_NETWORK_PASSPHRASE` | Must match the network the RPC endpoint serves |
+| `DENYLIST_GATE_CONTRACT_ID` | Deployed `denylist-gate` contract to subscribe to |
+| `ALLOWLIST_TOKEN_CONTRACT_ID` | Deployed `allowlist-token` contract to subscribe to |
+| `WEBHOOK_URL` | Endpoint that receives POSTed contract events |
+| `POLL_INTERVAL_MS` | Polling interval in milliseconds (default `5000`) |
+| `MAX_RETRIES` | Consecutive failures before the listener gives up (default `10`) |
+| `START_LEDGER` | Starting ledger for the very first cursor-less event query |
+
+See the comments in `.env.example` for allowed values and testnet guidance.
+
 ## Quick example
 
 ```ts
@@ -32,7 +50,10 @@ const eventSource = new RpcEventSource({
   contractIds: [process.env.DENYLIST_GATE_CONTRACT_ID!, process.env.ALLOWLIST_TOKEN_CONTRACT_ID!],
 });
 
-const webhook = new HttpWebhookSender({ url: 'http://localhost:4000/webhook' });
+const webhook = new HttpWebhookSender({
+  url: 'http://localhost:4000/webhook',
+  signingSecret: process.env.WEBHOOK_SIGNING_SECRET,
+});
 
 const listener = new HorizonListener({
   eventSource,
@@ -64,6 +85,87 @@ app.post('/webhook', (req, res) => {
 app.listen(4000);
 ```
 
+## Polling mode vs stream mode
+
+`HorizonListener` supports two polling modes via the `mode` option:
+
+- **`poll`** (default) — fixed-interval polling. The listener always waits
+  `pollIntervalMs` between each `getEvents` call, regardless of whether events
+  were returned. Suitable for most use cases.
+
+- **`stream`** — backoff-only "stream-like" mode. The listener polls again
+  immediately after processing a full page of events, and only sleeps
+  `pollIntervalMs` when a poll returns no new events. This reduces latency for
+  high-activity contracts without hammering the RPC during quiet periods.
+
+```ts
+const listener = new HorizonListener({
+  eventSource,
+  onEvent: async (event) => { /* ... */ },
+  mode: 'stream',      // or 'poll' (default)
+  pollIntervalMs: 5000, // sleep duration during quiet periods
+});
+```
+
+## Webhook signature verification
+
+When `HttpWebhookSender` is constructed with a `signingSecret`, every outbound
+request carries an `X-Signature` header of the form:
+
+```
+X-Signature: sha256=<hex-encoded HMAC-SHA256 of the raw request body, keyed by signingSecret>
+```
+
+The HMAC is computed over the exact JSON string sent as the request body
+(before any parsing), so a receiver must verify against the raw bytes, not a
+re-serialized version of the parsed body — re-serializing can change key
+order or whitespace and produce a different digest.
+
+A receiver should recompute the HMAC over the raw body with the shared
+secret and compare it to the header using a constant-time comparison (to
+avoid leaking the secret through timing differences), rejecting the request
+if they don't match or if the header is missing:
+
+```ts
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import express from 'express';
+
+const WEBHOOK_SIGNING_SECRET = process.env.WEBHOOK_SIGNING_SECRET!;
+
+const app = express();
+
+// Capture the raw body bytes for HMAC verification before JSON parsing.
+app.use(express.json({ verify: (req, _res, buf) => {
+  (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
+} }));
+
+function isValidSignature(rawBody: Buffer, header: string | undefined): boolean {
+  if (!header) return false;
+
+  const expected = createHmac('sha256', WEBHOOK_SIGNING_SECRET).update(rawBody).digest('hex');
+  const expectedHeader = `sha256=${expected}`;
+
+  const a = Buffer.from(header);
+  const b = Buffer.from(expectedHeader);
+  return a.length === b.length && timingSafeEqual(a, b);
+}
+
+app.post('/webhook', (req, res) => {
+  const rawBody = (req as express.Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0);
+
+  if (!isValidSignature(rawBody, req.header('X-Signature'))) {
+    return res.sendStatus(401);
+  }
+
+  console.log('received event', req.body);
+  res.sendStatus(200);
+});
+app.listen(4000);
+```
+
+If `signingSecret` is omitted, `HttpWebhookSender` sends requests without an
+`X-Signature` header, exactly as before this feature was added.
+
 ## Reconnect / backoff behavior
 
 If `eventSource.getEvents(...)` throws (RPC unreachable, rate-limited, cursor
@@ -77,6 +179,31 @@ process manager would be responsible for restarting the process.
 
 Individual `onEvent` handler errors are caught and logged without stopping
 the polling loop, so one bad event doesn't take down the whole listener.
+
+## Graceful shutdown
+
+For clean shutdown in a long-running Node process, call `HorizonListener.stop()`
+from a signal handler:
+
+```ts
+process.on('SIGINT', () => {
+  console.log('Shutting down gracefully...');
+  listener.stop();
+});
+
+process.on('SIGTERM', () => {
+  console.log('Shutting down gracefully...');
+  listener.stop();
+});
+
+listener.start().catch((err) => {
+  console.error('horizon-listener gave up after repeated failures', err);
+  process.exit(1);
+});
+```
+
+See `examples/graceful-shutdown.ts` for a complete example using the webhook
+forwarder factory.
 
 ## Logging
 

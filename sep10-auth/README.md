@@ -16,6 +16,21 @@ npm install
 (This package is part of the `compliance-adapters` npm workspace; run install
 from the repo root.)
 
+## Configuration
+
+Copy the root [`.env.example`](../.env.example) to `.env` at the repo root and
+fill in the `SEP10_*` variables before running the package locally:
+
+| Variable | Description |
+|---|---|
+| `SEP10_SERVER_SECRET` | Secret key of the server-side SEP-10 signing keypair |
+| `SEP10_SERVER_PUBLIC_KEY` | Corresponding public key (used as `serverAccountId`) |
+| `SEP10_HOME_DOMAIN` | Home domain embedded in challenge transactions |
+| `SEP10_WEB_AUTH_DOMAIN` | Web-auth domain (often the same as `SEP10_HOME_DOMAIN`) |
+| `SEP10_TIMEOUT_SECONDS` | Challenge lifetime in seconds (default `300`) |
+
+See the comments in `.env.example` for allowed values and testnet guidance.
+
 ## API
 
 ### `generateChallenge(clientAddress, serverKeypair, options?)`
@@ -38,6 +53,21 @@ const challenge = generateChallenge(clientAddress, serverKeypair, {
 // send challenge.transactionXDR to the client to sign
 ```
 
+To support the SEP-10 client domain flow (where a wallet's client-domain
+server co-signs the challenge), pass `clientDomain` along with the
+`clientSigningKey` published on `<clientDomain>/.well-known/stellar.toml`
+(this package does not fetch stellar.toml itself, so resolve the key
+yourself):
+
+```ts
+const challenge = generateChallenge(clientAddress, serverKeypair, {
+  homeDomain: 'example.com',
+  webAuthDomain: 'auth.example.com',
+  clientDomain: 'wallet.example',
+  clientSigningKey: 'GABC...', // from wallet.example/.well-known/stellar.toml
+});
+```
+
 ### `verifyChallenge(signedTransactionXDR, options)`
 
 Verifies a client-signed challenge transaction and returns the authenticated
@@ -54,6 +84,7 @@ const result = verifyChallenge(signedXDR, {
 
 if (result.valid) {
   // result.address is the authenticated Stellar account ID
+  // result.clientDomain is set if the challenge used the client domain flow
 } else {
   // result.error describes why verification failed
 }

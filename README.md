@@ -49,7 +49,17 @@ npm test --workspace=sep10-auth
 
 # build all packages
 npm run build
+
+# build a single package
+npm run build --workspace=sep10-auth
 ```
+
+### Building
+
+The root-level `npm run build` script runs the TypeScript compiler across all three packages
+(`sep10-auth`, `sanctions-oracle`, and `horizon-listener`) using npm workspaces. Each package
+produces compiled output in its `dist/` directory. This is equivalent to running `tsc -p .` in
+each package independently.
 
 ### Working with a single package
 
@@ -74,8 +84,11 @@ logs what it would do):
 
 ```bash
 npm run build --workspace=sanctions-oracle
-node sanctions-oracle/dist/sync.js --dry-run --addresses ./sanctions-oracle/test/fixtures/addresses.json
+npx compliance-adapters sync-sanctions --dry-run --addresses ./sanctions-oracle/test/fixtures/addresses.json
 ```
+
+Run `npx compliance-adapters --help` for available commands and
+`npx compliance-adapters sync-sanctions --help` for command-specific options.
 
 See each package's README for its full API and configuration options.
 
@@ -91,6 +104,11 @@ deliberately kept full of small, well-scoped issues. Open issues are labeled by 
 (`complexity: trivial`, `complexity: medium`, `complexity: high`) so you can pick work that
 matches your available time — trivial issues are also tagged `good first issue` and don't require
 Soroban expertise.
+
+## Security
+
+See [SECURITY.md](./SECURITY.md) for the trust model behind each package and how to report a
+vulnerability.
 
 ## Disclaimer
 
