@@ -3,6 +3,7 @@ export { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from './mockProvider';
 export {
   syncSanctionsToDenylist,
   createRpcDenylistWriter,
+  runCli,
   DenylistWriter,
   SyncOptions,
   SyncResult,
