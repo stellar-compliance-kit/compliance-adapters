@@ -89,13 +89,57 @@ This is a reference pattern: it re-verifies the raw challenge transaction on
 every request. A production deployment would typically verify once and issue
 a short-lived session token instead — that's out of scope for this package.
 
+### `rateLimiter(options?)`
+
+An Express middleware factory that rate-limits incoming requests using a
+sliding-window in-memory counter. Useful for protecting the challenge
+generation endpoint (or any other endpoint) from being hammered by a single
+client.
+
+```ts
+import express from 'express';
+import { rateLimiter } from 'sep10-auth';
+
+const app = express();
+
+app.use(
+  '/api/challenge',
+  rateLimiter({ windowMs: 30_000, maxRequests: 10 })
+);
+
+app.post('/api/challenge', (req, res) => {
+  // ... generate and return the challenge ...
+});
+```
+
+**Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `windowMs` | `60000` (1 minute) | The time window in milliseconds during which requests are counted. |
+| `maxRequests` | `100` | The maximum number of requests allowed within the window. |
+| `keyGenerator` | `(req) => req.ip` | A function returning a unique key for each client (defaults to the request IP). |
+
+When the limit is exceeded the middleware responds with **429** and a JSON body:
+
+```json
+{ "error": "rate_limit_exceeded", "retryAfter": 15 }
+```
+
+The `Retry-After` header is also set to the number of seconds the client should
+wait before retrying.
+
+> **Note**: The in-memory store is process-local and not shared across
+> instances. For multi-process or multi-region deployments, replace this
+> middleware with a Redis-backed limiter such as `express-rate-limit`.
+
 ## Scope
 
 This package only implements the SEP-10 building blocks (challenge
-generation, verification, and a thin middleware). It does not collect the
-user's signature itself — clients are responsible for signing the challenge
-with their own wallet (e.g. [Freighter](https://www.freighter.app/) or
-another Stellar wallet) and sending the signed XDR back.
+generation, verification, thin middleware, and rate limiting). It does not
+collect the user's signature itself — clients are responsible for signing
+the challenge with their own wallet (e.g. [Freighter](https://www.freighter.app/)
+or another Stellar wallet) and sending the signed XDR back.
 
 See the [repo root README](../README.md) for how this package fits into the
 rest of `compliance-adapters`, and
