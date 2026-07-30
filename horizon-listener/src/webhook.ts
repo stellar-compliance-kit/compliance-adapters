@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import { computeBackoffDelayMs } from './backoff';
 import type { RawContractEvent } from './eventSource';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
+import { type AnyTracer, NoopTracer, type TracingContext } from './tracing';
 
 export interface WebhookSender {
   send(event: RawContractEvent): Promise<void>;
@@ -25,6 +26,16 @@ export interface HttpWebhookSenderOptions {
    * Defaults to a no-op registry — zero overhead when omitted.
    */
   metrics?: AnyMetricsRegistry;
+  /**
+   * Optional tracer for OpenTelemetry-compatible distributed tracing.
+   * When omitted, a no-op tracer is used — zero overhead and no exports.
+   *
+   * Pass a parent `TracingContext` alongside the tracer to nest webhook spans
+   * inside an existing trace tree (e.g. a parent `event_relay` span).
+   */
+  tracer?: AnyTracer;
+  /** Parent context for outbound webhook spans. */
+  parentContext?: TracingContext;
 }
 
 export class HttpWebhookSender implements WebhookSender {
@@ -34,6 +45,8 @@ export class HttpWebhookSender implements WebhookSender {
   private readonly timeoutMs: number | undefined;
   private readonly maxRetries: number;
   private readonly metrics: AnyMetricsRegistry;
+  private readonly tracer: AnyTracer;
+  private readonly parentContext: TracingContext | undefined;
 
   constructor(options: HttpWebhookSenderOptions) {
     this.url = options.url;
@@ -44,6 +57,8 @@ export class HttpWebhookSender implements WebhookSender {
     this.timeoutMs = options.timeoutMs;
     this.maxRetries = options.maxRetries ?? 3;
     this.metrics = options.metrics ?? new NoopMetricsRegistry();
+    this.tracer = options.tracer ?? new NoopTracer();
+    this.parentContext = options.parentContext;
   }
 
   /**
@@ -57,6 +72,22 @@ export class HttpWebhookSender implements WebhookSender {
 
     if (this.signingSecret) {
       headers['X-Signature'] = `sha256=${this.sign(body)}`;
+    }
+
+    // The span covers the entire logical delivery (including retries), so it
+    // is started once here and ended exactly once below on final success or
+    // final failure — not per attempt.
+    const span = this.tracer.startSpan('webhook', this.parentContext);
+    span.setAttribute('webhook.url', this.url);
+    // event.id is a stable, low-cardinality correlation identifier — safe to attach
+    span.setAttribute('event.id', event.id);
+
+    // Inject traceparent into outbound request headers for downstream correlation
+    const traceparent =
+      span.traceId ? this.tracer.injectContext({ traceId: span.traceId, spanId: span.spanId })
+      : undefined;
+    if (traceparent) {
+      headers['traceparent'] = traceparent;
     }
 
     let lastError: Error | undefined;
@@ -96,6 +127,8 @@ export class HttpWebhookSender implements WebhookSender {
 
           this.metrics.counter.inc('webhook', 'success');
           this.metrics.histogram.observe('webhook', durationMs);
+          span.setAttribute('http.status_code', response.status);
+          span.end('ok');
           return;
         } finally {
           if (timeoutHandle) {
@@ -110,6 +143,7 @@ export class HttpWebhookSender implements WebhookSender {
         }
         lastError = error instanceof Error ? error : new Error(String(error));
         if (attempt === this.maxRetries) {
+          span.end('error', lastError);
           throw lastError;
         }
       }

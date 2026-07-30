@@ -9,6 +9,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
+import { type AnyTracer, NoopTracer } from './tracing';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { withRetry, RetryOptions } from './retry';
 import { computeBackoffDelayMs } from './backoff';
@@ -131,6 +132,15 @@ export interface SyncOptions {
    * `denylist_write` operations.  When omitted all instrumentation is a no-op.
    */
   metrics?: AnyMetricsRegistry;
+  /**
+   * Optional tracer for OpenTelemetry-compatible distributed tracing.
+   * When omitted, a no-op tracer is used — zero overhead and no exports.
+   *
+   * Stellar addresses are NOT attached to spans unless
+   * `TracingOptions.redactPayload` is explicitly set to `false` on the
+   * tracer; the span will carry only phase and outcome attributes.
+   */
+  tracer?: AnyTracer;
 }
 
 /**
@@ -196,6 +206,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     progressInterval = 100,
     concurrency,
     metrics = new NoopMetricsRegistry(),
+    tracer = new NoopTracer(),
   } = options;
 
   const uniqueAddresses = Array.from(new Set(addresses));
@@ -208,6 +219,9 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     uniqueAddresses,
     async (address) => {
       const start = Date.now();
+      const span = tracer.startSpan('address_check');
+      // address is omitted from spans by default (privacy / cardinality).
+      span.setAttribute('address_check.index', addresses.indexOf(address));
       try {
         let result = cache?.get(address);
         if (!result) {
@@ -217,6 +231,8 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         const durationMs = Date.now() - start;
         metrics.counter.inc('address_check', 'success');
         metrics.histogram.observe('address_check', durationMs);
+        span.setAttribute('address_check.flagged', result.flagged);
+        span.end('ok');
         if (result.flagged) {
           flagged.push(address);
           flaggedWithSource.push({ address, source: result.source });
@@ -225,6 +241,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         const durationMs = Date.now() - start;
         metrics.counter.inc('address_check', 'failure');
         metrics.histogram.observe('address_check', durationMs);
+        span.end('error', err instanceof Error ? err : new Error(String(err)));
         failed.push(address);
       } finally {
         checked += 1;
@@ -244,6 +261,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   } else {
     for (const { address, source } of flaggedWithSource) {
       const start = Date.now();
+      const span = tracer.startSpan('denylist_write');
       try {
         // Call writer with extended interface if available
         const writerExt = writer as DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> };
@@ -256,11 +274,15 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         const durationMs = Date.now() - start;
         metrics.counter.inc('denylist_write', 'success');
         metrics.histogram.observe('denylist_write', durationMs);
+        // transaction hash is set after success — it's a stable, non-PII identifier
+        span.setAttribute('denylist_write.tx_hash', result.hash);
+        span.end('ok');
         written.push(address);
       } catch (err) {
         const durationMs = Date.now() - start;
         metrics.counter.inc('denylist_write', 'failure');
         metrics.histogram.observe('denylist_write', durationMs);
+        span.end('error', err instanceof Error ? err : new Error(String(err)));
         throw err;
       }
     }

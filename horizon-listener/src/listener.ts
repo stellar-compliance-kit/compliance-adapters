@@ -1,6 +1,7 @@
 import type { EventSource, RawContractEvent } from './eventSource';
 import { computeBackoffDelayMs, type BackoffOptions } from './backoff';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
+import { type AnyTracer, NoopTracer } from './tracing';
 
 export interface Logger {
   debug: (...args: unknown[]) => void;
@@ -46,6 +47,20 @@ export interface HorizonListenerOptions {
    * `NoopMetricsRegistry` is passed) all instrumentation is zero-overhead.
    */
   metrics?: AnyMetricsRegistry;
+  /**
+   * Optional tracer for OpenTelemetry-compatible distributed tracing.
+   * When omitted, a no-op tracer is used — zero overhead and no exports.
+   *
+   * To enable tracing, pass a `DefaultTracer` configured with an exporter:
+   * ```ts
+   * import { DefaultTracer } from 'horizon-listener';
+   * const tracer = new DefaultTracer({
+   *   serviceName: 'horizon-listener',
+   *   exporter: async (span) => { await otlpExporter.export(span); },
+   * });
+   * ```
+   */
+  tracer?: AnyTracer;
 }
 
 const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
@@ -72,6 +87,7 @@ export class HorizonListener {
   private readonly backoffOptions: BackoffOptions;
   private readonly mode: 'poll' | 'stream';
   private readonly metrics: AnyMetricsRegistry;
+  private readonly tracer: AnyTracer;
 
   private cursor: string | undefined;
   private running = false;
@@ -91,6 +107,7 @@ export class HorizonListener {
     this.backfilling = options.startLedger != null;
     this.mode = options.mode ?? 'poll';
     this.metrics = options.metrics ?? new NoopMetricsRegistry();
+    this.tracer = options.tracer ?? new NoopTracer();
   }
 
   // Soroban RPC's getEvents is a polling/cursor API, not a persistent stream, so
@@ -105,6 +122,10 @@ export class HorizonListener {
     this.attempt = 0;
 
     while (this.running) {
+      // ── rpc_poll span ────────────────────────────────────────────────────
+      const pollSpan = this.tracer.startSpan('rpc_poll');
+      pollSpan.setAttribute('poll.attempt', this.attempt);
+
       let response: { events: RawContractEvent[]; nextCursor: string };
       const pollStart = Date.now();
       try {
@@ -115,6 +136,9 @@ export class HorizonListener {
         this.metrics.histogram.observe('rpc_poll', pollDuration);
 
         this.attempt += 1;
+        pollSpan.setAttribute('poll.attempt', this.attempt);
+        pollSpan.end('error', err instanceof Error ? err : new Error(String(err)));
+
         this.logger.warn(
           `horizon-listener: poll failed (attempt ${this.attempt}/${this.maxRetries}), backing off`,
           err,
@@ -123,6 +147,8 @@ export class HorizonListener {
         if (this.attempt >= this.maxRetries) {
           this.running = false;
           this.metrics.counter.inc('rpc_poll', 'cancelled');
+          // Mark the final poll as cancelled (we gave up, not a transient error)
+          this.tracer.startSpan('rpc_poll').end('cancelled');
           throw new Error(
             `horizon-listener: giving up after ${this.attempt} consecutive failed polls`,
           );
@@ -146,22 +172,38 @@ export class HorizonListener {
       const pollDuration = Date.now() - pollStart;
       this.metrics.counter.inc('rpc_poll', 'success');
       this.metrics.histogram.observe('rpc_poll', pollDuration);
+      pollSpan.setAttribute('poll.event_count', response.events.length);
+      pollSpan.end('ok');
 
       this.attempt = 0;
 
       for (const event of response.events) {
         const relayStart = Date.now();
+        // ── event_relay span ───────────────────────────────────────────────
+        // Parent is the poll span so spans form a coherent tree:
+        // rpc_poll → event_relay (one child per event)
+        const relayContext = { traceId: pollSpan.traceId, spanId: pollSpan.spanId };
+        const relaySpan = this.tracer.startSpan('event_relay', relayContext);
+        // Low-cardinality attributes only — event ID and contract ID are stable
+        // identifiers, not user-data payloads. The event value is redacted by
+        // the tracer (redactPayload: true by default).
+        relaySpan.setAttribute('event.id', event.id);
+        relaySpan.setAttribute('event.contract_id', event.contractId);
+        relaySpan.setAttribute('event.ledger', event.ledger);
+
         try {
           this.logger.info('horizon-listener: received contract event', event);
           await this.onEvent(event);
           const relayDuration = Date.now() - relayStart;
           this.metrics.counter.inc('event_relay', 'success');
           this.metrics.histogram.observe('event_relay', relayDuration);
+          relaySpan.end('ok');
         } catch (err) {
           const relayDuration = Date.now() - relayStart;
           this.logger.error('horizon-listener: onEvent handler threw', err);
           this.metrics.counter.inc('event_relay', 'failure');
           this.metrics.histogram.observe('event_relay', relayDuration);
+          relaySpan.end('error', err instanceof Error ? err : new Error(String(err)));
           if (this.onEventFailure) {
             try {
               await this.onEventFailure(event, err);

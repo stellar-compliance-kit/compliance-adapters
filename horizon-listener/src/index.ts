@@ -19,3 +19,16 @@ export {
   type Outcome,
   type MetricsRegistryOptions,
 } from './metrics';
+export {
+  DefaultTracer,
+  NoopTracer,
+  type AnyTracer,
+  type Tracer,
+  type Span,
+  type SpanData,
+  type SpanStatus,
+  type SpanAttributes,
+  type SpanExporter,
+  type TracingContext,
+  type TracingOptions,
+} from './tracing';
