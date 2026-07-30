@@ -1,4 +1,4 @@
-import { syncSanctionsToDenylist, DenylistWriter } from '../src/sync';
+import { syncSanctionsToDenylist, DenylistWriter, ProviderResultCache, AuditLogEntry } from '../src/sync';
 import { SanctionsProvider } from '../src/SanctionsProvider';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 
@@ -243,5 +243,126 @@ describe('syncSanctionsToDenylist', () => {
     expect(result.flagged).toEqual(allFlaggedAddresses);
     expect(result.written).toEqual([]);
     expect(writer.addToDenylist).not.toHaveBeenCalled();
+  });
+
+  it('uses cache to avoid redundant provider calls', async () => {
+    const provider = new MockSanctionsProvider();
+    const spy = jest.spyOn(provider, 'checkAddress');
+    const cache = new ProviderResultCache();
+    const writer = makeFakeWriter();
+
+    // First sync: provider is called
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      cache,
+    });
+
+    expect(spy).toHaveBeenCalledTimes(2);
+    spy.mockClear();
+
+    // Second sync: cache is used, provider not called
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      cache,
+    });
+
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('respects cache TTL', async () => {
+    const provider = new MockSanctionsProvider();
+    const spy = jest.spyOn(provider, 'checkAddress');
+    const cache = new ProviderResultCache(100); // 100ms TTL
+    const writer = makeFakeWriter();
+
+    // First sync
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer,
+      cache,
+    });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+    spy.mockClear();
+
+    // Wait for cache to expire
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    // Second sync: cache expired, provider called again
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer,
+      cache,
+    });
+
+    expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('Audit logging', () => {
+  it('audit logger receives entries with correct fields', async () => {
+    const provider = new MockSanctionsProvider();
+    const auditLogs: AuditLogEntry[] = [];
+    const writer: DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> } = {
+      addToDenylist: jest.fn().mockResolvedValue({ hash: 'fakehash' }),
+      addToDenylistWithSource: jest.fn(async (address: string, source: string) => {
+        const entry: AuditLogEntry = {
+          address,
+          timestamp: new Date().toISOString(),
+          source,
+          txHash: 'fakehash',
+        };
+        auditLogs.push(entry);
+        return { hash: 'fakehash', auditLog: entry };
+      }),
+    };
+
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: false,
+    });
+
+    expect(auditLogs).toHaveLength(1);
+    const entry = auditLogs[0];
+    expect(entry.address).toBe(FLAGGED_ADDRESS);
+    expect(entry.source).toMatch(/mock-watchlist/);
+    expect(entry.txHash).toBe('fakehash');
+    expect(new Date(entry.timestamp)).toBeInstanceOf(Date);
+  });
+
+  it('audit logging is skipped in dry-run mode', async () => {
+    const provider = new MockSanctionsProvider();
+    const auditLogs: AuditLogEntry[] = [];
+    const writer: DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> } = {
+      addToDenylist: jest.fn().mockResolvedValue({ hash: 'fakehash' }),
+      addToDenylistWithSource: jest.fn(async (address: string, source: string) => {
+        const entry: AuditLogEntry = {
+          address,
+          timestamp: new Date().toISOString(),
+          source,
+          txHash: 'fakehash',
+        };
+        auditLogs.push(entry);
+        return { hash: 'fakehash', auditLog: entry };
+      }),
+    };
+
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer,
+      dryRun: true,
+    });
+
+    expect(auditLogs).toHaveLength(0);
+    expect(writer.addToDenylistWithSource).not.toHaveBeenCalled();
   });
 });

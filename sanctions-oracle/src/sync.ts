@@ -11,6 +11,75 @@ import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
 import { withRetry, RetryOptions } from './retry';
 
+interface CacheEntry {
+  result: { flagged: boolean; source: string };
+  timestamp: number;
+}
+
+/**
+ * Optional cache layer for SanctionsProvider results.
+ * Avoids redundant provider calls for addresses checked recently.
+ */
+export class ProviderResultCache {
+  private cache: Map<string, CacheEntry> = new Map();
+  private readonly ttlMs: number;
+
+  /**
+   * Create a result cache with a specified time-to-live (TTL).
+   * @param ttlMs Time-to-live for cached results in milliseconds
+   */
+  constructor(ttlMs: number = 3600000) {
+    this.ttlMs = ttlMs;
+  }
+
+  /**
+   * Get a cached result if available and not expired.
+   * @returns The cached result, or undefined if not found or expired
+   */
+  get(address: string): { flagged: boolean; source: string } | undefined {
+    const entry = this.cache.get(address);
+    if (!entry) return undefined;
+
+    const now = Date.now();
+    if (now - entry.timestamp > this.ttlMs) {
+      this.cache.delete(address);
+      return undefined;
+    }
+
+    return entry.result;
+  }
+
+  /**
+   * Store a result in the cache.
+   */
+  set(address: string, result: { flagged: boolean; source: string }): void {
+    this.cache.set(address, {
+      result,
+      timestamp: Date.now(),
+    });
+  }
+
+  /**
+   * Clear all cached entries.
+   */
+  clear(): void {
+    this.cache.clear();
+  }
+}
+
+export interface AuditLogEntry {
+  /** The address added to the denylist. */
+  address: string;
+  /** Timestamp when the write occurred (ISO 8601 string). */
+  timestamp: string;
+  /** The source watchlist that flagged the address. */
+  source: string;
+  /** The transaction hash resulting from the write. */
+  txHash: string;
+}
+
+export type AuditLogger = (entry: AuditLogEntry) => void | Promise<void>;
+
 export interface DenylistWriter {
   addToDenylist(address: string): Promise<{ hash: string }>;
 }
@@ -28,27 +97,50 @@ export interface SyncOptions {
   dryRun?: boolean;
   /** Retry-with-backoff config applied around each provider.checkAddress call. */
   retry?: RetryOptions;
+  /**
+   * Optional cache to avoid redundant provider lookups for recently checked addresses.
+   * If provided, results are cached with a configurable TTL.
+   */
+  cache?: ProviderResultCache;
 }
 
+/**
+ * Result of a sanctions sync operation.
+ */
 export interface SyncResult {
+  /** Total number of candidate addresses checked against the provider. */
   checked: number;
+  /** Addresses flagged by the sanctions provider. */
   flagged: string[];
+  /** Addresses successfully written to the denylist (empty if dryRun is true). */
   written: string[];
   /** Addresses whose provider check failed on every retry attempt. */
   failed: string[];
+  /** Whether this was a dry-run (read-only) operation. */
   dryRun: boolean;
 }
 
+interface FlaggedAddressWithSource {
+  address: string;
+  source: string;
+}
+
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
-  const { provider, addresses, writer, dryRun = false, retry } = options;
+  const { provider, addresses, writer, dryRun = false, retry, cache } = options;
 
   const flagged: string[] = [];
+  const flaggedWithSource: FlaggedAddressWithSource[] = [];
   const failed: string[] = [];
   for (const address of addresses) {
     try {
-      const result = await withRetry(() => provider.checkAddress(address), retry);
+      let result = cache?.get(address);
+      if (!result) {
+        result = await withRetry(() => provider.checkAddress(address), retry);
+        cache?.set(address, result);
+      }
       if (result.flagged) {
         flagged.push(address);
+        flaggedWithSource.push({ address, source: result.source });
       }
     } catch (err) {
       failed.push(address);
@@ -57,12 +149,19 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
 
   const written: string[] = [];
   if (dryRun) {
-    for (const address of flagged) {
+    for (const { address } of flaggedWithSource) {
       console.log(`[dry-run] would call add_to_denylist(${address})`);
     }
   } else {
-    for (const address of flagged) {
-      await writer.addToDenylist(address);
+    for (const { address, source } of flaggedWithSource) {
+      // Call writer with extended interface if available
+      const writerExt = writer as DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> };
+      let result: { hash: string; auditLog?: AuditLogEntry };
+      if (writerExt.addToDenylistWithSource) {
+        result = await writerExt.addToDenylistWithSource(address, source);
+      } else {
+        result = await writer.addToDenylist(address);
+      }
       written.push(address);
     }
   }
@@ -81,13 +180,18 @@ export interface RpcDenylistWriterOptions {
   networkPassphrase: string;
   contractId: string;
   sourceKeypair: Keypair;
+  /**
+   * Optional audit logger to record each denylist write for compliance purposes.
+   * Called with address, timestamp, source, and resulting transaction hash.
+   */
+  auditLogger?: AuditLogger;
 }
 
 // Kept behind the DenylistWriter interface (rather than called directly
 // from syncSanctionsToDenylist) so tests can inject a fake writer instead
 // of touching a live RPC endpoint.
-export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): DenylistWriter {
-  const { rpcUrl, networkPassphrase, contractId, sourceKeypair } = options;
+export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> } {
+  const { rpcUrl, networkPassphrase, contractId, sourceKeypair, auditLogger } = options;
   const server = new rpc.Server(rpcUrl);
   const contract = new Contract(contractId);
 
@@ -108,6 +212,35 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
 
       const sendResult = await server.sendTransaction(prepared);
       return { hash: sendResult.hash };
+    },
+    async addToDenylistWithSource(address: string, source: string): Promise<{ hash: string; auditLog?: AuditLogEntry }> {
+      const account = await server.getAccount(sourceKeypair.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase,
+      })
+        .addOperation(contract.call('add_to_denylist', nativeToScVal(address, { type: 'address' })))
+        .setTimeout(30)
+        .build();
+
+      const prepared = await server.prepareTransaction(tx);
+      prepared.sign(sourceKeypair);
+
+      const sendResult = await server.sendTransaction(prepared);
+
+      const auditEntry: AuditLogEntry = {
+        address,
+        timestamp: new Date().toISOString(),
+        source,
+        txHash: sendResult.hash,
+      };
+
+      if (auditLogger) {
+        await auditLogger(auditEntry);
+      }
+
+      return { hash: sendResult.hash, auditLog: auditEntry };
     },
   };
 }
