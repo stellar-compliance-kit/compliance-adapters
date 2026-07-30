@@ -32,6 +32,12 @@ export interface HorizonListenerOptions {
   // (without sleeping pollIntervalMs between pages); the listener only switches
   // to interval-based polling once a page returns zero events.
   startLedger?: number;
+  // 'poll' (default): fixed-interval polling, always sleeps pollIntervalMs
+  // between each call regardless of whether events were returned.
+  // 'stream': polls again immediately when events were returned, reducing
+  // latency for high-activity contracts; falls back to pollIntervalMs when
+  // a poll returns empty (quiet period).
+  mode?: 'poll' | 'stream';
 }
 
 const defaultSleep = (ms: number): Promise<void> =>
@@ -45,6 +51,7 @@ export class HorizonListener {
   private readonly logger: Logger;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly backoffOptions: BackoffOptions;
+  private readonly mode: 'poll' | 'stream';
 
   private cursor: string | undefined;
   private running = false;
@@ -60,6 +67,7 @@ export class HorizonListener {
     this.sleep = options.sleep ?? defaultSleep;
     this.backoffOptions = options.backoffOptions ?? {};
     this.backfilling = options.startLedger != null;
+    this.mode = options.mode ?? 'poll';
   }
 
   // Soroban RPC's getEvents is a polling/cursor API, not a persistent stream, so
@@ -119,6 +127,12 @@ export class HorizonListener {
 
       if (!this.running) {
         break;
+      }
+
+      // In stream mode, skip sleeping when events were returned so the next
+      // page is fetched immediately; only sleep during quiet periods.
+      if (this.mode === 'stream' && response.events.length > 0) {
+        continue;
       }
 
       await this.sleep(this.pollIntervalMs);

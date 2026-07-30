@@ -267,6 +267,105 @@ describe('HorizonListener', () => {
     expect(getEvents).toHaveBeenCalledTimes(4);
   });
 
+  describe('mode: poll (default)', () => {
+    it('sleeps pollIntervalMs between every poll regardless of events returned', async () => {
+      const getEvents = jest
+        .fn()
+        .mockResolvedValueOnce({ events: [makeEvent({ id: 'e-1' })], nextCursor: 'c1' })
+        .mockResolvedValueOnce({ events: [], nextCursor: 'c1' })
+        .mockResolvedValueOnce({ events: [makeEvent({ id: 'e-2' })], nextCursor: 'c2' });
+
+      const eventSource: EventSource = { getEvents };
+      const sleepCalls: number[] = [];
+      let pollCount = 0;
+
+      const listener = new HorizonListener({
+        eventSource,
+        onEvent: jest.fn(),
+        mode: 'poll',
+        pollIntervalMs: 5000,
+        sleep: async (ms) => {
+          sleepCalls.push(ms);
+          pollCount++;
+          // Stop after the third poll's sleep to avoid hanging
+          if (pollCount >= 3) listener.stop();
+        },
+      });
+
+      await listener.start();
+
+      // Every poll sleeps pollIntervalMs, whether events were returned or not
+      expect(sleepCalls).toEqual([5000, 5000, 5000]);
+      expect(getEvents).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe('mode: stream', () => {
+    it('polls again immediately when events are returned, sleeps only when poll is empty', async () => {
+      const getEvents = jest
+        .fn()
+        // Active period: events returned → no sleep
+        .mockResolvedValueOnce({ events: [makeEvent({ id: 'e-1' })], nextCursor: 'c1' })
+        .mockResolvedValueOnce({ events: [makeEvent({ id: 'e-2' })], nextCursor: 'c2' })
+        // Quiet period: no events → sleep pollIntervalMs
+        .mockResolvedValueOnce({ events: [], nextCursor: 'c2' })
+        // Active again
+        .mockResolvedValueOnce({ events: [makeEvent({ id: 'e-3' })], nextCursor: 'c3' });
+
+      const eventSource: EventSource = { getEvents };
+      const sleepCalls: number[] = [];
+      const received: string[] = [];
+
+      const listener = new HorizonListener({
+        eventSource,
+        onEvent: (event) => {
+          received.push(event.id);
+          if (event.id === 'e-3') listener.stop();
+        },
+        mode: 'stream',
+        pollIntervalMs: 5000,
+        sleep: async (ms) => {
+          sleepCalls.push(ms);
+        },
+      });
+
+      await listener.start();
+
+      expect(received).toEqual(['e-1', 'e-2', 'e-3']);
+      // Only slept once: during the quiet period (empty poll)
+      expect(sleepCalls).toEqual([5000]);
+      expect(getEvents).toHaveBeenCalledTimes(4);
+    });
+
+    it('falls back to pollIntervalMs during consecutive quiet polls', async () => {
+      const getEvents = jest
+        .fn()
+        .mockResolvedValueOnce({ events: [], nextCursor: 'c0' })
+        .mockResolvedValueOnce({ events: [], nextCursor: 'c0' })
+        .mockResolvedValueOnce({ events: [makeEvent({ id: 'e-1' })], nextCursor: 'c1' });
+
+      const eventSource: EventSource = { getEvents };
+      const sleepCalls: number[] = [];
+
+      const listener = new HorizonListener({
+        eventSource,
+        onEvent: () => {
+          listener.stop();
+        },
+        mode: 'stream',
+        pollIntervalMs: 3000,
+        sleep: async (ms) => {
+          sleepCalls.push(ms);
+        },
+      });
+
+      await listener.start();
+
+      // Two empty polls = two sleeps at pollIntervalMs
+      expect(sleepCalls).toEqual([3000, 3000]);
+    });
+  });
+
   it('stop() causes the polling loop to exit and start() to resolve rather than hang', async () => {
     const getEvents = jest.fn().mockResolvedValue({ events: [], nextCursor: 'same-cursor' });
     const eventSource: EventSource = { getEvents };
