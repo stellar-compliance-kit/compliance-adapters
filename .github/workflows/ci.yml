@@ -40,6 +40,9 @@ jobs:
       - name: Unit Tests
         run: npm test
 
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
+
   test-e2e:
     name: End-to-End Integration Tests
     runs-on: ubuntu-latest
