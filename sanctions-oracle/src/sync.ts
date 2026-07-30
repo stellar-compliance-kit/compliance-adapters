@@ -190,13 +190,14 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     concurrency,
   } = options;
 
+  const uniqueAddresses = Array.from(new Set(addresses));
   const flagged: string[] = [];
   const flaggedWithSource: FlaggedAddressWithSource[] = [];
   const failed: string[] = [];
   let checked = 0;
 
   await executeConcurrent(
-    addresses,
+    uniqueAddresses,
     async (address) => {
       try {
         let result = cache?.get(address);
@@ -213,7 +214,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
       } finally {
         checked += 1;
         if (logger && checked % progressInterval === 0) {
-          logger.log(`Progress: ${checked}/${addresses.length} addresses checked`);
+          logger.log(`Progress: ${checked}/${uniqueAddresses.length} addresses checked`);
         }
       }
     },
@@ -240,7 +241,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   }
 
   return {
-    checked: addresses.length,
+    checked: uniqueAddresses.length,
     flagged,
     written,
     failed,
@@ -350,16 +351,17 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
   };
 }
 
-interface CliArgs {
+export interface CliArgs {
   addressesPath?: string;
   dryRun: boolean;
   contractId?: string;
   rpcUrl?: string;
   networkPassphrase?: string;
   secretKey?: string;
+  help?: boolean;
 }
 
-function parseArgs(argv: string[]): CliArgs {
+export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { dryRun: false };
   for (let i = 0; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -382,6 +384,10 @@ function parseArgs(argv: string[]): CliArgs {
       case '--secret-key':
         args.secretKey = argv[++i];
         break;
+      case '--help':
+      case '-h':
+        args.help = true;
+        break;
       default:
         break;
     }
@@ -389,8 +395,44 @@ function parseArgs(argv: string[]): CliArgs {
   return args;
 }
 
-export async function runCli(): Promise<void> {
-  const args = parseArgs(process.argv.slice(2));
+function printHelp(): void {
+  console.log(`
+sanctions-oracle sync - Synchronize sanctions data to a Soroban denylist
+
+USAGE:
+  sanctions-oracle sync [OPTIONS]
+
+OPTIONS:
+  --addresses <path>          Path to JSON file containing array of addresses to check
+  --contract-id <id>          Soroban contract ID (required for live sync)
+  --rpc-url <url>             Soroban RPC endpoint URL (required for live sync)
+  --network-passphrase <str>  Network passphrase (required for live sync)
+  --secret-key <key>          Source account secret key (required for live sync)
+  --dry-run                   Preview output without writing to the contract
+  --help, -h                  Show this help message
+
+EXAMPLES:
+  # Dry-run mode: check addresses without writing
+  sanctions-oracle sync --addresses addresses.json --dry-run
+
+  # Live mode: sync flagged addresses to contract
+  sanctions-oracle sync \\
+    --addresses addresses.json \\
+    --contract-id CXXXX \\
+    --rpc-url https://soroban-testnet.stellar.org \\
+    --network-passphrase "Test SDF Network ; September 2015" \\
+    --secret-key SBXXXX
+  `);
+}
+
+export async function runCli(argv?: string[]): Promise<void> {
+  const processArgv = argv ?? process.argv.slice(2);
+  const args = parseArgs(processArgv);
+
+  if (args.help) {
+    printHelp();
+    return;
+  }
 
   if (!args.addressesPath) {
     console.error('Missing required flag: --addresses <path-to-json-array>');

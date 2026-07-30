@@ -179,6 +179,20 @@ into [Insomnia](https://insomnia.rest/) or another API client. The collection in
 - **JSON schema documentation** — Expected addresses file format
 - **CLI flags reference** — Complete parameter documentation
 
+### View CLI flags
+
+To see a summary of all available flags and examples:
+
+```sh
+node dist/sync.js --help
+```
+
+or the short form:
+
+```sh
+node dist/sync.js -h
+```
+
 ### Dry-run against testnet (no transactions submitted)
 
 ```sh
