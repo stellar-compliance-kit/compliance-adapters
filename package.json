@@ -9,14 +9,20 @@
   "workspaces": [
     "sep10-auth",
     "sanctions-oracle",
-    "horizon-listener"
+    "horizon-listener",
+    "e2e-tests"
   ],
   "engines": {
     "node": ">=20.0.0"
   },
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present -- --testPathIgnorePatterns=e2e-tests",
+    "test:e2e:start": "docker-compose -f e2e-tests/docker-compose.yml up -d",
+    "test:e2e:stop": "docker-compose -f e2e-tests/docker-compose.yml down -v",
+    "test:e2e:test-only": "npm run test --workspace=e2e-tests",
+    "test:e2e": "npm run test:e2e:start && npm run test:e2e:test-only ; npm run test:e2e:stop",
+    "test:e2e:ci": "npm run test:e2e:start && npm run test:e2e:test-only ; docker-compose -f e2e-tests/docker-compose.yml down -v || true",
     "lint": "eslint . --ext .ts",
     "format": "prettier --check .",
     "format:write": "prettier --write ."
