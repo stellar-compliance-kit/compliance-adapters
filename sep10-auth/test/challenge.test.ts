@@ -36,4 +36,38 @@ describe('generateChallenge', () => {
     expect(challenge.networkPassphrase).toBe(Networks.TESTNET);
     expect(challenge.transactionXDR.length).toBeGreaterThan(0);
   });
+
+  it('round-trips a custom memo into the built challenge transaction', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+    const memo = '123456789';
+
+    const challenge = generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+      homeDomain,
+      webAuthDomain: homeDomain,
+      networkPassphrase: Networks.TESTNET,
+      memo,
+    });
+
+    const tx = new Transaction(challenge.transactionXDR, Networks.TESTNET);
+
+    expect(tx.memo.type).toBe('id');
+    expect(tx.memo.value).toBe(memo);
+  });
+
+  it('omits the memo from the built transaction when not provided', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+
+    const challenge = generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+      homeDomain,
+      webAuthDomain: homeDomain,
+      networkPassphrase: Networks.TESTNET,
+    });
+
+    const tx = new Transaction(challenge.transactionXDR, Networks.TESTNET);
+
+    expect(tx.memo.type).toBe('none');
+    expect(tx.memo.value).toBeNull();
+  });
 });

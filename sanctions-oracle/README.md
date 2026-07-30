@@ -30,8 +30,8 @@ by invoking its `add_to_denylist(address)` contract function.
   `DenylistWriter` interface, so the sync logic can be unit tested with a
   fake writer, with no live network required.
 
-This package does **not** implement real sanctions data fetching or a
-provider registry — those are tracked as separate future issues.
+This package does **not** implement real sanctions data fetching — that is
+tracked as a separate future issue.
 
 Provider calls made during a sync (`provider.checkAddress`) are wrapped in
 a retry-with-backoff helper (`withRetry`, see `src/retry.ts`): on failure
@@ -66,6 +66,35 @@ class MyProvider implements SanctionsProvider {
 Anything conforming to this interface — a REST client, a cache in front of
 multiple upstream lists, a local CSV loader — can be passed to
 `syncSanctionsToDenylist` in place of `MockSanctionsProvider`.
+
+## Running multiple providers with `ProviderRegistry`
+
+Real deployments often want to check an address against more than one
+source at once (e.g. an OFAC-style list, a regional list, and an internal
+denylist) rather than a single `SanctionsProvider`. `ProviderRegistry` holds
+several providers, queries all of them, and resolves disagreements according
+to a configurable policy. It implements `SanctionsProvider` itself, so it's
+a drop-in replacement anywhere a single provider is expected — including
+`syncSanctionsToDenylist`:
+
+```ts
+import { ProviderRegistry, syncSanctionsToDenylist } from 'sanctions-oracle';
+
+const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
+registry.register('ofac-style', ofacProvider);
+registry.register('regional-list', regionalProvider);
+registry.register('internal-denylist', internalProvider);
+
+await syncSanctionsToDenylist({ provider: registry, addresses, writer });
+```
+
+Supported conflict-resolution policies: `'any-flag-wins'` (flagged if any
+provider flags it), `'majority-vote'` (flagged if a majority of responding
+providers flag it, with a configurable tie-break), and
+`'priority-override'` (the highest-priority registered provider's answer
+wins outright). See
+[`docs/provider-registry-design.md`](./docs/provider-registry-design.md)
+for the full design, including how provider errors are handled.
 
 ## Running the sync script
 

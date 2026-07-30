@@ -95,6 +95,11 @@ deliberately kept full of small, well-scoped issues. Open issues are labeled by 
 matches your available time — trivial issues are also tagged `good first issue` and don't require
 Soroban expertise.
 
+## Security
+
+See [SECURITY.md](./SECURITY.md) for the trust model behind each package and how to report a
+vulnerability.
+
 ## Disclaimer
 
 The `sanctions-oracle` package's bundled mock provider is a **placeholder for development and

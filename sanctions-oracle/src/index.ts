@@ -10,3 +10,15 @@ export {
   RpcDenylistWriterOptions,
 } from './sync';
 export { withRetry, RetryOptions } from './retry';
+export {
+  ProviderRegistry,
+  ProviderRegistryAllProvidersFailedError,
+  ConflictResolutionPolicy,
+  ProviderErrorMode,
+  TieBreak,
+  ProviderRegistryOptions,
+  RegisterOptions,
+  ProviderCheckOutcome,
+  ProviderErrorOutcome,
+  RegistryCheckResult,
+} from './ProviderRegistry';
