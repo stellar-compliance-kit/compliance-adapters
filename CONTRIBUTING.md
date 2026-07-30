@@ -49,6 +49,29 @@ npm test --workspace=sep10-auth
 - Prefer small, focused functions and explicit types on exported APIs.
 - Don't vendor `compliance-primitives` contract code here — reference it as a dependency/link.
 
+## Branch protection and required status checks
+
+The `main` branch has branch protection enabled. **The CI workflow must be green before any PR
+can be merged** — GitHub will block the merge button if the required status check hasn't passed.
+
+The required check is the **"Lint & Test (TypeScript)"** job defined in
+`.github/workflows/ci.yml`. It runs `npm run lint`, `npm run build`, and `npm test` across all
+workspaces. All three steps must succeed for the check to pass.
+
+What this means in practice:
+
+- A red CI run is not just a warning — the PR is blocked until the check goes green.
+- If you push a fix and CI still fails, push another commit; GitHub re-evaluates the check on
+  every push to the PR branch.
+- If the run looks like a flake (network timeout, rate-limit, etc.), use the **"Re-run failed
+  jobs"** button on the Actions tab. Do not merge around a legitimate failure by temporarily
+  disabling the rule — contact a maintainer if you believe the failure is environmental.
+- Draft PRs are not blocked, but converting a draft to "Ready for review" will not remove the
+  check requirement. The check still needs to be green before merge.
+
+If you're unsure why CI is red, look at the failing step's log in the Actions tab; the lint and
+build steps usually have the clearest error messages.
+
 ## Reporting bugs / requesting features
 
 Use the issue templates under **New Issue** — one for bug reports, one for feature requests.
