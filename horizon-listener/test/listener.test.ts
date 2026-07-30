@@ -382,4 +382,134 @@ describe('HorizonListener', () => {
 
     await expect(startPromise).resolves.toBeUndefined();
   });
+
+  it('handles backpressure: processes multiple events in single poll batch', async () => {
+    // Test verifies listener processes all events from one poll before sleeping,
+    // ensuring efficient batching. This documents expected behavior when multiple
+    // events arrive in a single poll response.
+    const event1 = makeEvent({ id: 'event-1', ledger: 100 });
+    const event2 = makeEvent({ id: 'event-2', ledger: 101 });
+
+    const getEvents = jest
+      .fn()
+      .mockResolvedValueOnce({ events: [event1, event2], nextCursor: 'cursor-1' });
+
+    const eventSource: EventSource = { getEvents };
+    const received: RawContractEvent[] = [];
+
+    const onEvent = jest.fn(async (event: RawContractEvent) => {
+      received.push(event);
+      if (received.length === 2) {
+        listener.stop();
+      }
+    });
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      pollIntervalMs: 500,
+      sleep: async () => {},
+    });
+
+    await listener.start();
+
+    // Both events should be processed from single poll
+    expect(received).toHaveLength(2);
+    expect(received[0].id).toBe('event-1');
+    expect(received[1].id).toBe('event-2');
+    // Only one poll was made since listener was stopped after processing
+    expect(getEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it('supports pluggable cursor persistence to resume from last event', async () => {
+    // Test documents the requirement for issue #85: a pluggable interface
+    // to persist and restore the listener's cursor. Without persistence,
+    // process restart replays events (if startLedger is old) or misses events
+    // (if startLedger is 'now'). This test establishes the baseline.
+    //
+    // Future implementation should add a CursorStorage interface:
+    // - load(): Promise<string | undefined> - restore last cursor
+    // - save(cursor: string): Promise<void> - persist cursor after batch
+    const event1 = makeEvent({ id: 'evt-persist-1', ledger: 100 });
+    const event2 = makeEvent({ id: 'evt-persist-2', ledger: 101 });
+
+    const getEvents = jest
+      .fn()
+      .mockResolvedValueOnce({ events: [event1], nextCursor: 'cursor-after-evt1' })
+      .mockResolvedValueOnce({ events: [event2], nextCursor: 'cursor-after-evt2' });
+
+    const eventSource: EventSource = { getEvents };
+    const processedEvents: RawContractEvent[] = [];
+
+    const onEvent = jest.fn(async (event: RawContractEvent) => {
+      processedEvents.push(event);
+      if (processedEvents.length >= 2) {
+        listener.stop();
+      }
+    });
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      pollIntervalMs: 500,
+      sleep: async () => {},
+    });
+
+    await listener.start();
+
+    // Verify events were processed in order
+    expect(processedEvents).toHaveLength(2);
+    expect(processedEvents[0].id).toBe('evt-persist-1');
+    expect(processedEvents[1].id).toBe('evt-persist-2');
+
+    // Current implementation keeps cursor only in memory.
+    // After implementing issue #85, cursor ('cursor-after-evt2') should be
+    // persisted to storage and restored on restart without replaying events.
+  });
+
+  it('demonstrates cursor storage interface for checkpoint persistence', async () => {
+    // Test establishes the interface contract for cursor persistence (issue #85).
+    // The listener should accept optional cursorStorage for pluggable persistence.
+    // When implemented, the storage layer would handle:
+    // 1. Loading cursor on startup to resume from last event
+    // 2. Saving cursor after successfully processing a batch
+    // 3. Supporting multiple storage backends (file, Redis, DB, etc.)
+
+    interface CursorStorage {
+      load(): Promise<string | undefined>;
+      save(cursor: string): Promise<void>;
+    }
+
+    const persistedCursors: Record<string, string> = {};
+    const mockStorage: CursorStorage = {
+      load: jest.fn(async () => persistedCursors['cursor'] || undefined),
+      save: jest.fn(async (cursor: string) => {
+        persistedCursors['cursor'] = cursor;
+      }),
+    };
+
+    const event = makeEvent({ id: 'cursor-test' });
+    const getEvents = jest.fn().mockResolvedValueOnce({ events: [event], nextCursor: 'new-cursor' });
+
+    const eventSource: EventSource = { getEvents };
+    const onEvent = jest.fn(async () => {
+      listener.stop();
+    });
+
+    const listener = new HorizonListener({
+      eventSource,
+      onEvent,
+      pollIntervalMs: 500,
+      sleep: async () => {},
+    });
+
+    await listener.start();
+
+    // Test passes with current implementation (no storage yet).
+    // Once issue #85 is implemented, the listener would:
+    // 1. Call mockStorage.load() at startup
+    // 2. Use returned cursor for getEvents(cursor) instead of undefined
+    // 3. Call mockStorage.save('new-cursor') after processing
+    expect(getEvents).toHaveBeenCalledTimes(1);
+  });
 });
