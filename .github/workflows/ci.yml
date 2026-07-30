@@ -29,6 +29,11 @@ jobs:
         # Runs ESLint across sep10-auth/src, sanctions-oracle/src, and horizon-listener/src
         run: npm run lint
 
+      - name: Format check
+        # Verifies all .ts/.js files across every package match Prettier rules.
+        # Fails the build if any file would be reformatted.
+        run: npm run format:check
+
       - name: Build
         run: npm run build
 
