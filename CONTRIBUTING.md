@@ -43,6 +43,44 @@ npm test --workspace=sep10-auth
 4. Run `npm run lint` and `npm test` locally before opening a PR.
 5. Open a PR referencing the issue number (`Fixes #123`) and describe what you changed and why.
 
+## Commit messages
+
+This repo uses [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+Format the subject line as:
+
+```
+<type>(<scope>): <short imperative summary>
+```
+
+- **type** — one of `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `build`, `ci`,
+  `chore`, `revert`.
+- **scope** *(optional but encouraged)* — the workspace the change belongs to:
+  `sep10-auth`, `sanctions-oracle`, or `horizon-listener`. Omit it for repo-wide
+  changes (root config, CI, top-level docs).
+- **summary** — imperative mood ("add", not "added"/"adds"), no trailing period,
+  and ideally under ~72 characters.
+
+```
+feat(sanctions-oracle): add retry with backoff to the denylist sync
+fix(sep10-auth): reject a challenge whose home domain does not match
+docs: describe the monorepo's package boundaries in CONTRIBUTING
+ci: run npm audit at the high severity level
+```
+
+Put the *why* in the body when the subject can't carry it, and reference the
+issue there or in the PR description (`Fixes #123`).
+
+Branch names follow the same vocabulary — `feat/short-description`,
+`fix/short-description`, `docs/short-description` — which is what the existing
+merge commits show.
+
+### commitlint
+
+Not currently wired into CI. If added later, the natural setup is
+`@commitlint/config-conventional` plus a `commit-msg` hook, matching the types
+listed above. Until then this section is the convention; reviewers may ask you to
+reword a subject that doesn't follow it.
+
 ## Branch protection (recommended)
 
 The repository intends to enforce the following branch protection rules on `main` to ensure
