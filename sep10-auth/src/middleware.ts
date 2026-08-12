@@ -7,6 +7,7 @@ import { RequestHandler } from 'express';
 import { type Logger, noopLogger } from '@compliance-adapters/logger';
 import { verifyChallenge, VerifyChallengeOptions } from './verify';
 import { RevocationStore } from './revocation';
+import { parseBearerToken } from './bearer';
 
 declare global {
   namespace Express {
@@ -35,10 +36,9 @@ export function createSep10Middleware(options: Sep10MiddlewareOptions): RequestH
   const logger = options.logger ?? noopLogger;
 
   return async (req, res, next) => {
-    const authHeader = req.header('Authorization') ?? '';
-    const [scheme, token] = authHeader.split(' ');
+    const token = parseBearerToken(req.header('Authorization'));
 
-    if (scheme !== 'Bearer' || !token) {
+    if (!token) {
       logger.warn('sep10-auth: missing or malformed bearer token', {
         ip: req.ip,
         path: req.path,

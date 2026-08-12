@@ -3,6 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
+export * from './bearer';
 export * from './challenge';
 export * from './verify';
 export * from './middleware';
