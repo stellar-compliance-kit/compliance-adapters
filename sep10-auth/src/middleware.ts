@@ -31,7 +31,46 @@ export interface Sep10MiddlewareOptions extends VerifyChallengeOptions {
 // typically verify once and issue a short-lived session JWT instead of
 // re-verifying the challenge transaction on every request; that is out of
 // scope for this package.
+/**
+ * Reject options that cannot authenticate anything, at factory time.
+ *
+ * `verifyChallenge` would otherwise fail every single request at runtime with a
+ * per-request 401, which reads as "the client's challenge is bad" rather than
+ * "the server is misconfigured". Failing here surfaces it at wiring time, next
+ * to the call that is actually wrong.
+ *
+ * Only emptiness is checked - whether a `serverAccountId` is a real Stellar key,
+ * or a home domain is reachable, stays `verifyChallenge`'s business.
+ */
+function assertValidOptions(options: Sep10MiddlewareOptions): void {
+  const toList = (value: string | string[]): string[] =>
+    Array.isArray(value) ? value : [value];
+  const isBlank = (value: unknown): boolean =>
+    typeof value !== 'string' || value.trim() === '';
+
+  if (isBlank(options.serverAccountId)) {
+    throw new TypeError('createSep10Middleware: serverAccountId must be a non-empty string');
+  }
+
+  for (const [name, value] of [
+    ['homeDomains', options.homeDomains],
+    ['webAuthDomain', options.webAuthDomain],
+  ] as const) {
+    const entries = toList(value);
+    if (entries.length === 0) {
+      throw new TypeError(`createSep10Middleware: ${name} must not be empty`);
+    }
+    if (entries.some(isBlank)) {
+      throw new TypeError(
+        `createSep10Middleware: ${name} must not contain empty or blank entries`,
+      );
+    }
+  }
+}
+
 export function createSep10Middleware(options: Sep10MiddlewareOptions): RequestHandler {
+  assertValidOptions(options);
+
   const logger = options.logger ?? noopLogger;
 
   return async (req, res, next) => {
