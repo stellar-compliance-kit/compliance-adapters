@@ -96,7 +96,9 @@ new package rather than being bolted onto an existing one — open an issue to d
 
 ## Code style
 
-- TypeScript, Node 20+. Formatting is enforced by Prettier/ESLint (`npm run lint`).
+- TypeScript, Node 20+. The exact version CI uses is pinned in `.nvmrc` — run
+  `nvm use` in the repo root to match it. Formatting is enforced by
+  Prettier/ESLint (`npm run lint`).
 - Prefer small, focused functions and explicit types on exported APIs.
 - Don't vendor `compliance-primitives` contract code here — reference it as a dependency/link.
 
