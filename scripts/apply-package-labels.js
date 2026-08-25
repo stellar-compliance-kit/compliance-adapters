@@ -33,14 +33,14 @@ async function ensureLabel(name, color, description) {
 }
 
 async function applyLabelToOpenIssues(label) {
-  const issues = await octokit.request('GET /repos/{owner}/{repo}/issues', {
+  const issues = await octokit.paginate('GET /repos/{owner}/{repo}/issues', {
     owner: repoOwner,
     repo: repoName,
     state: 'open',
     per_page: 100,
   });
 
-  for (const issue of issues.data) {
+  for (const issue of issues) {
     // Skip pull requests
     if (issue.pull_request) continue;
     // Heuristic: add label if the package name appears in title/body

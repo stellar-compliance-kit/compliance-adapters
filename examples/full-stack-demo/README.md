@@ -27,7 +27,8 @@ The app listens on `http://localhost:3000` and exposes:
 
 Use environment variables to customize runtime values:
 
-- `SERVER_ACCOUNT_ID`
+- `SERVER_SECRET_KEY` — Stellar secret key used to sign SEP-10 challenges in `/challenge`. Falls back to an ephemeral random keypair (regenerated on every restart) if unset — fine for a single local run, not for anything shared.
+- `SERVER_ACCOUNT_ID` — must match `SERVER_SECRET_KEY`'s public key; defaults to that public key when omitted
 - `RPC_URL`
 - `CONTRACT_ID`
 - `START_LEDGER`
