@@ -8,38 +8,54 @@
  * - Network configuration
  */
 
+import * as fs from 'fs';
 import {
   Keypair,
   TransactionBuilder,
   BASE_FEE,
-  Networks,
   nativeToScVal,
+  scValToNative,
   rpc,
-  Contract,
   Address,
+  Operation,
 } from '@stellar/stellar-sdk';
 
 /**
  * Configuration for the local testnet.
- * Matches docker-compose.yml environment.
+ * Matches docker-compose.yml environment (stellar/quickstart running with
+ * `--local --enable-soroban-rpc`).
  */
 export const TEST_CONFIG = {
   rpcUrl: 'http://localhost:8000/soroban/rpc',
-  networkPassphrase: Networks.FUTURENET_NETWORK_PASSPHRASE,
-  networkId: 'Testnet SDF Future Network ; October 2022',
-  
-  // Test keypairs (derived from Stellar testnet defaults)
-  // These are PUBLIC/REUSABLE; never commit real secrets
-  issuer: Keypair.fromSecret('SBXQHF6SRJ6K32UKSJ2NVSRQHXNHOHUWCXZCWZSFUHJ5ZQEVJ7VNU4Y4'),
-  
-  // Known flagged address from sanctions-oracle mock provider
-  flaggedAddress: 'GHBRPOIGF3CBFNOBM2O4RAK3VRJNVGFYGWWQC5HYFSXMECOSFOGYR5XK',
-  
+  friendbotUrl: 'http://localhost:8000/friendbot',
+  horizonUrl: 'http://localhost:8000',
+  networkPassphrase: 'Standalone Network ; February 2017',
+
+  // Throwaway test keypair, freshly funded via friendbot on every run against
+  // an ephemeral local network. PUBLIC/REUSABLE; never commit real secrets.
+  issuer: Keypair.fromSecret('SBLXYLBT346LAKZRPSQ73XJUQWIKTTO3GEICHFNJDQ3WORVHG5G5GVR4'),
+
+  // A syntactically valid (real checksum) Stellar address to submit through
+  // the real on-chain add_to_denylist call. sanctions-oracle's
+  // MOCK_FLAGGED_ADDRESSES are checksum-invalid placeholders (fine for
+  // off-chain provider matching in unit tests, but rejected by the SDK's
+  // Address/StrKey validation when building an on-chain transaction) — this
+  // e2e test passes this address to MockSanctionsProvider explicitly instead.
+  flaggedAddress: 'GBPRXLMJ4EE23ARCDREURT57NDZIVHJWTZNB4ZWDMH2DKAP5Z4B5LWMD',
+
   // Timeouts
   rpcHealthCheckTimeoutMs: 30000,
   txSubmitTimeoutMs: 30000,
   eventPollTimeoutMs: 30000,
 };
+
+/**
+ * Create an rpc.Server for the given URL, allowing plain http:// for local
+ * test networks (the SDK refuses insecure URLs unless opted in explicitly).
+ */
+function createServer(rpcUrl: string): rpc.Server {
+  return new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
+}
 
 /**
  * Wait for RPC to be healthy and responding.
@@ -50,10 +66,10 @@ export async function waitForRpcHealth(
   delayMs: number = 1000,
 ): Promise<rpc.Server> {
   let lastError: Error | undefined;
-  
+
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      const server = new rpc.Server(TEST_CONFIG.rpcUrl);
+      const server = createServer(TEST_CONFIG.rpcUrl);
       // Make a simple RPC call to verify connectivity
       const response = await server.getNetwork();
       console.log(`✓ RPC healthy at attempt ${attempt}, network:`, response);
@@ -68,92 +84,206 @@ export async function waitForRpcHealth(
       }
     }
   }
-  
+
   throw new Error(
     `RPC health check failed after ${maxAttempts} attempts. Last error: ${lastError?.message}`,
   );
 }
 
 /**
- * Fund a test account with native asset.
- * Uses the Stellar testnet friendbot equivalent (simulated via synthetic transactions).
+ * Fund a test account with native asset via the soroban-preview/quickstart
+ * container's built-in friendbot endpoint, then wait for the funding
+ * transaction to land so the account is immediately usable.
  */
-export async function fundAccount(
-  server: rpc.Server,
-  keypair: Keypair,
-  nativeAmount: string = '1000',
-): Promise<void> {
+export async function fundAccount(server: rpc.Server, keypair: Keypair): Promise<void> {
   try {
-    const account = await server.getAccount(keypair.publicKey());
-    console.log(`✓ Account ${keypair.publicKey()} already funded, balance:`, account.balances);
+    await server.getAccount(keypair.publicKey());
+    console.log(`✓ Account ${keypair.publicKey()} already funded`);
     return;
   } catch (err) {
-    // Account doesn't exist; need to fund it
+    // Account doesn't exist yet; fall through and fund it below.
   }
 
-  // In a real testnet, we'd call friendbot. For soroban-preview, we use a synthetic account.
-  // For now, we'll use a helper that submits a synthetic funding transaction.
-  console.log(`⏳ Funding account ${keypair.publicKey()}...`);
+  console.log(`⏳ Funding account ${keypair.publicKey()} via friendbot...`);
+  // Friendbot can 502 for a few seconds after the RPC endpoint itself starts
+  // responding (they come up on slightly different schedules inside the
+  // container), so retry transient failures instead of failing immediately.
+  const friendbotUrl = `${TEST_CONFIG.friendbotUrl}?addr=${encodeURIComponent(keypair.publicKey())}`;
+  let lastError: string | undefined;
+  let funded = false;
+  for (let attempt = 1; attempt <= 10 && !funded; attempt++) {
+    const response = await fetch(friendbotUrl);
+    if (response.ok) {
+      funded = true;
+      break;
+    }
+    lastError = `${response.status} ${response.statusText} ${await response.text().catch(() => '')}`;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  if (!funded) {
+    throw new Error(`Friendbot funding failed for ${keypair.publicKey()}: ${lastError}`);
+  }
 
-  // Option 1: If soroban-preview has a built-in friendbot, use it:
-  // const response = await fetch(`${TEST_CONFIG.rpcUrl}/friendbot?addr=${keypair.publicKey()}`);
+  // Friendbot returns as soon as the funding transaction is submitted, not
+  // once it's finalized; poll until the account is actually visible via RPC.
+  const startTime = Date.now();
+  while (Date.now() - startTime < TEST_CONFIG.txSubmitTimeoutMs) {
+    try {
+      await server.getAccount(keypair.publicKey());
+      console.log(`✓ Account ${keypair.publicKey()} funded`);
+      return;
+    } catch (err) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
 
-  // Option 2: Use a master account to fund (requires running a master that's already funded)
-  // This is what we'll do for the e2e test environment.
-
-  // For now, throw a helpful error that explains the setup
   throw new Error(
-    `Account ${keypair.publicKey()} is not funded. ` +
-      `In soroban-preview, manually fund with: stellar account fund ${keypair.publicKey()} native 1000`,
+    `Account ${keypair.publicKey()} still not visible via RPC ${TEST_CONFIG.txSubmitTimeoutMs}ms after friendbot funding.`,
   );
 }
 
 /**
- * Get or create a test account, ensuring it's funded and ready.
+ * Get or create a test account, funding it via friendbot if it doesn't exist yet.
  */
 export async function getOrFundAccount(
   server: rpc.Server,
   keypair: Keypair,
 ): Promise<{ pubkey: string; sequence: string; balance: string }> {
   try {
-    const account = await server.getAccount(keypair.publicKey());
-    const nativeBalance =
-      account.balances.find((b) => b.asset_type === 'native')?.balance ?? '0';
-    return {
-      pubkey: keypair.publicKey(),
-      sequence: account.sequence,
-      balance: nativeBalance,
-    };
+    return await readAccountSummary(server, keypair);
   } catch (err) {
-    throw new Error(
-      `Account ${keypair.publicKey()} not funded. ` +
-        `RPC returned: ${err instanceof Error ? err.message : String(err)}`,
-    );
+    // Not found; fund it and read the summary again.
   }
+
+  await fundAccount(server, keypair);
+  return readAccountSummary(server, keypair);
+}
+
+async function readAccountSummary(
+  server: rpc.Server,
+  keypair: Keypair,
+): Promise<{ pubkey: string; sequence: string; balance: string }> {
+  const account = await server.getAccount(keypair.publicKey());
+  return {
+    pubkey: keypair.publicKey(),
+    sequence: account.sequenceNumber(),
+    balance: await fetchNativeBalance(keypair.publicKey()),
+  };
+}
+
+/**
+ * Soroban RPC's getAccount() only returns enough of the account to build
+ * transactions (id + sequence number), not its balances; read those from
+ * the container's bundled Horizon instead (same host, REST API).
+ */
+async function fetchNativeBalance(publicKey: string): Promise<string> {
+  const response = await fetch(`${TEST_CONFIG.horizonUrl}/accounts/${publicKey}`);
+  if (!response.ok) return '0';
+  const account = (await response.json()) as {
+    balances?: { asset_type: string; balance: string }[];
+  };
+  return account.balances?.find((b) => b.asset_type === 'native')?.balance ?? '0';
 }
 
 /**
  * Deploy a prebuilt Soroban contract WASM.
- * 
- * Assumes the WASM is already in e2e-tests/fixtures/ and committed to the repo.
- * This test does NOT build the contract; it uses a pre-built artifact.
+ *
+ * Assumes the WASM is already in e2e-tests/fixtures/ and committed to the repo
+ * (see e2e-tests/fixtures/README.md). This function does NOT build the
+ * contract; it uploads and instantiates a pre-built artifact via two
+ * transactions: upload the WASM, then create a contract instance from it.
  */
 export async function deployContract(
   server: rpc.Server,
   issuerKeypair: Keypair,
   wasmPath: string,
-  contractName: string = 'denylist-gate',
 ): Promise<{ contractId: string; deployTxHash: string }> {
-  throw new Error(
-    `Contract deployment not yet implemented. ` +
-      `For this e2e test, use a pre-deployed contract instance or implement Soroban contract deployment.`,
-  );
-  // TODO: Implement if contracts are not pre-deployed to the testnet
-  // This would involve:
-  // 1. Reading the WASM file from disk
-  // 2. Building an upload contract transaction
-  // 3. Submitting and waiting for finalization
-  // 4. Returning the deployed contract ID
+  let wasm: Buffer;
+  try {
+    wasm = fs.readFileSync(wasmPath);
+  } catch (err) {
+    throw new Error(
+      `Could not read contract WASM at ${wasmPath}. ` +
+        `See e2e-tests/fixtures/README.md for how to build/obtain it. ` +
+        `(${err instanceof Error ? err.message : String(err)})`,
+    );
+  }
+
+  console.log(`⏳ Uploading contract WASM (${wasm.byteLength} bytes)...`);
+  const uploadAccount = await server.getAccount(issuerKeypair.publicKey());
+  const uploadTx = new TransactionBuilder(uploadAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: TEST_CONFIG.networkPassphrase,
+  })
+    .addOperation(Operation.uploadContractWasm({ wasm }))
+    .setTimeout(30)
+    .build();
+
+  const uploadResult = await submitPreparedTransaction(server, uploadTx, issuerKeypair);
+  const wasmHash = scValToNative(uploadResult.returnValue) as Buffer;
+  console.log(`✓ WASM uploaded, hash: ${wasmHash.toString('hex')}`);
+
+  console.log(`⏳ Creating contract instance...`);
+  const createAccount = await server.getAccount(issuerKeypair.publicKey());
+  const createTx = new TransactionBuilder(createAccount, {
+    fee: BASE_FEE,
+    networkPassphrase: TEST_CONFIG.networkPassphrase,
+  })
+    .addOperation(
+      Operation.createCustomContract({
+        address: new Address(issuerKeypair.publicKey()),
+        wasmHash,
+      }),
+    )
+    .setTimeout(30)
+    .build();
+
+  const createResult = await submitPreparedTransaction(server, createTx, issuerKeypair);
+  const contractId = scValToNative(createResult.returnValue) as string;
+  console.log(`✓ Contract deployed: ${contractId}`);
+
+  return { contractId, deployTxHash: createResult.txHash };
+}
+
+/**
+ * Simulate, sign, submit, and wait for finalization of a transaction that
+ * invokes a host function (upload/create/invoke contract). Returns the
+ * finalized transaction's return value along with its hash.
+ */
+async function submitPreparedTransaction(
+  server: rpc.Server,
+  tx: ReturnType<TransactionBuilder['build']>,
+  signer: Keypair,
+): Promise<{ returnValue: ReturnType<typeof nativeToScVal>; txHash: string }> {
+  let prepared;
+  try {
+    prepared = await server.prepareTransaction(tx);
+  } catch (error) {
+    const err = error instanceof Error ? error.message : String(error);
+    throw new Error(`Failed to prepare transaction (simulation error): ${err}`);
+  }
+
+  prepared.sign(signer);
+  const sendResult = await server.sendTransaction(prepared);
+  const txHash = sendResult.hash;
+
+  if (sendResult.status === 'ERROR') {
+    throw new Error(`Transaction submission failed: ${JSON.stringify(sendResult.errorResult)}`);
+  }
+
+  const startTime = Date.now();
+  while (Date.now() - startTime < 30000) {
+    const getResult = await server.getTransaction(txHash);
+    if (getResult.status === 'SUCCESS') {
+      return { returnValue: getResult.returnValue as ReturnType<typeof nativeToScVal>, txHash };
+    }
+    if (getResult.status === 'FAILED') {
+      throw new Error(`Transaction failed: ${txHash}, result: ${JSON.stringify(getResult)}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+
+  throw new Error(`Transaction ${txHash} not finalized within 30000ms`);
 }
 
 /**
@@ -167,18 +297,16 @@ export async function waitForTransactionFinalization(
   pollIntervalMs: number = 500,
 ): Promise<{ ledger: number; envelope: unknown }> {
   const startTime = Date.now();
-  
+
   while (Date.now() - startTime < maxWaitMs) {
     try {
       const response = await server.getTransaction(txHash);
       if (response.status === 'SUCCESS') {
         console.log(`✓ Transaction finalized: ${txHash}, ledger:`, response.ledger);
-        return { ledger: response.ledger, envelope: response.envelope_xdr };
+        return { ledger: response.ledger, envelope: response.envelopeXdr };
       }
       if (response.status === 'FAILED') {
-        throw new Error(
-          `Transaction failed: ${txHash}, reason: ${response.result_xdr}`,
-        );
+        throw new Error(`Transaction failed: ${txHash}, reason: ${response.resultXdr}`);
       }
       // status === 'PENDING', wait a bit more
     } catch (err) {
@@ -188,13 +316,11 @@ export async function waitForTransactionFinalization(
         throw err;
       }
     }
-    
+
     await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
-  
-  throw new Error(
-    `Transaction ${txHash} not finalized within ${maxWaitMs}ms`,
-  );
+
+  throw new Error(`Transaction ${txHash} not finalized within ${maxWaitMs}ms`);
 }
 
 /**
@@ -209,16 +335,16 @@ export async function submitTransaction(
   // Build and sign the transaction
   const built = tx.build();
   built.sign(signer);
-  
+
   // Submit to RPC
   const response = await server.sendTransaction(built);
   const hash = response.hash;
-  
+
   console.log(`📤 Transaction submitted: ${hash}`);
-  
+
   // Wait for finalization
   const { ledger } = await waitForTransactionFinalization(server, hash, timeoutMs);
-  
+
   console.log(`✓ Transaction finalized at ledger ${ledger}`);
   return { hash, ledger };
 }
@@ -242,25 +368,29 @@ export async function pollForContractEvent(
   const { timeout = 30000, pollInterval = 500 } = options;
   const startTime = Date.now();
   let cursor = options.cursor;
-  
+
   while (Date.now() - startTime < timeout) {
     try {
-      const request: Parameters<typeof server.getEvents>[0] =
-        cursor
-          ? {
-              cursor,
-              filters: [{ type: 'contract', contractIds: [contractId] }],
-            }
-          : {
-              startLedger: 0,
-              filters: [{ type: 'contract', contractIds: [contractId] }],
-            };
-      
+      let request: Parameters<typeof server.getEvents>[0];
+      if (cursor) {
+        request = {
+          cursor,
+          filters: [{ type: 'contract', contractIds: [contractId] }],
+        };
+      } else {
+        // Soroban RPC rejects startLedger: 0 ("must be positive") and requires
+        // it to be within the node's retention window; use the current ledger
+        // as a safe starting point for a cursor-less call.
+        const { sequence: latestLedger } = await server.getLatestLedger();
+        request = {
+          startLedger: latestLedger,
+          filters: [{ type: 'contract', contractIds: [contractId] }],
+        };
+      }
+
       // Type gymnastics to satisfy the SDK's generic types
-      const rawResponse = await (server.getEvents as (req: unknown) => Promise<unknown>)(
-        request,
-      );
-      
+      const rawResponse = await (server.getEvents as (req: unknown) => Promise<unknown>)(request);
+
       const response = rawResponse as {
         events?: Array<{
           id: string;
@@ -270,21 +400,22 @@ export async function pollForContractEvent(
         }>;
         cursor?: string;
       };
-      
+
       const events = (response.events ?? []).map((e) => ({
         id: e.id,
-        topic: (e.topic ?? []).map((t) => String(t)),
-        value: e.value,
+        topic: (e.topic ?? []).map((t) => String(scValToNative(t as never))),
+        value: scValToNative(e.value as never),
         ledger: e.ledger,
       }));
-      
-      const nextCursor = response.cursor ?? (events.length > 0 ? events[events.length - 1].id : cursor ?? '');
-      
+
+      const nextCursor =
+        response.cursor ?? (events.length > 0 ? events[events.length - 1].id : (cursor ?? ''));
+
       if (events.length > 0) {
         console.log(`✓ Found ${events.length} contract events`);
         return { events, nextCursor };
       }
-      
+
       cursor = nextCursor;
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     } catch (err) {
@@ -292,8 +423,6 @@ export async function pollForContractEvent(
       await new Promise((resolve) => setTimeout(resolve, pollInterval));
     }
   }
-  
-  throw new Error(
-    `No contract events found for ${contractId} within ${timeout}ms`,
-  );
+
+  throw new Error(`No contract events found for ${contractId} within ${timeout}ms`);
 }

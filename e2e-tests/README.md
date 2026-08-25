@@ -146,15 +146,18 @@ Tests that use `setTimeout` are flaky. This test handles it properly.
 
 ```
 Issuer (Contract Owner):
-  Public: GBUQWP3KQNXKC7XLWFLLJMXE72VAS6QLXRRTGZTTZPPQNYXV3VT5FHI
-  Secret: SBXQHF6SRJ6K32UKSJ2NVSRQHXNHOHUWCXZCWZSFUHJ5ZQEVJ7VNU4Y4
+  Public: GCYPY3WPMPBWJNXYMM2GN5ILBMMHCLB4EFOG6WI4MXCKW2O5SUAEBNUQ
+  Secret: SBLXYLBT346LAKZRPSQ73XJUQWIKTTO3GEICHFNJDQ3WORVHG5G5GVR4
+  (Throwaway keypair, funded fresh via friendbot on every run)
 
 Denylist Attester:
   (Same as issuer, for simplicity)
 
 Test Subject (Flagged Address):
-  GHBRPOIGF3CBFNOBM2O4RAK3VRJNVGFYGWWQC5HYFSXMECOSFOGYR5XK
-  (From sanctions-oracle mock provider)
+  GBPRXLMJ4EE23ARCDREURT57NDZIVHJWTZNB4ZWDMH2DKAP5Z4B5LWMD
+  (A syntactically valid address passed explicitly to MockSanctionsProvider —
+  sanctions-oracle's own MOCK_FLAGGED_ADDRESSES are checksum-invalid
+  placeholders that the SDK rejects when building an on-chain transaction)
 ```
 
 ### Contract Deployment

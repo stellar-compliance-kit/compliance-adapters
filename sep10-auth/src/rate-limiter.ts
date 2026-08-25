@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 import { RequestHandler } from 'express';
 
 export interface RateLimiterOptions {
@@ -8,7 +13,6 @@ export interface RateLimiterOptions {
 
 interface RateLimitEntry {
   timestamps: number[];
-  timeout: ReturnType<typeof setTimeout> | null;
 }
 
 const DEFAULT_WINDOW_MS = 60_000; // 1 minute
@@ -59,7 +63,6 @@ export function rateLimiter(options: RateLimiterOptions = {}): RequestHandler {
     for (const [key, entry] of store) {
       entry.timestamps = entry.timestamps.filter((t) => now - t < windowMs);
       if (entry.timestamps.length === 0) {
-        if (entry.timeout) clearTimeout(entry.timeout);
         store.delete(key);
       }
     }
@@ -76,7 +79,7 @@ export function rateLimiter(options: RateLimiterOptions = {}): RequestHandler {
 
     let entry = store.get(key);
     if (!entry) {
-      entry = { timestamps: [], timeout: null };
+      entry = { timestamps: [] };
       store.set(key, entry);
     }
 

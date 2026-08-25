@@ -13,8 +13,8 @@
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1",
-    "horizon-listener": "workspace:*",
-    "sanctions-oracle": "workspace:*"
+    "horizon-listener": "*",
+    "sanctions-oracle": "*"
   },
   "devDependencies": {
     "typescript": "^5.5.4",

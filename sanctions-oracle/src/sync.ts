@@ -18,7 +18,7 @@ import { MockSanctionsProvider } from './mockProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { withRetry, RetryOptions } from './retry';
-import { computeBackoffDelayMs } from './backoff';
+import { computeBackoffDelayMs, BackoffOptions } from './backoff';
 
 interface CacheEntry {
   result: { flagged: boolean; source: string };
@@ -204,7 +204,6 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     logger = noopLogger,
     retry,
     cache,
-    logger,
     progressInterval = 100,
     concurrency,
     metrics = new NoopMetricsRegistry(),
@@ -250,7 +249,9 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
       } finally {
         checked += 1;
         if (checked % progressInterval === 0) {
-          logger.debug(`sanctions-oracle: progress ${checked}/${uniqueAddresses.length} addresses checked`);
+          logger.debug(
+            `sanctions-oracle: progress ${checked}/${uniqueAddresses.length} addresses checked`,
+          );
         }
       }
     },
@@ -273,7 +274,12 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
       const span = tracer.startSpan('denylist_write');
       try {
         // Call writer with extended interface if available
-        const writerExt = writer as DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> };
+        const writerExt = writer as DenylistWriter & {
+          addToDenylistWithSource?: (
+            address: string,
+            source: string,
+          ) => Promise<{ hash: string; auditLog?: AuditLogEntry }>;
+        };
         let result: { hash: string; auditLog?: AuditLogEntry };
         if (writerExt.addToDenylistWithSource) {
           result = await writerExt.addToDenylistWithSource(address, source);
@@ -287,7 +293,10 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         span.setAttribute('denylist_write.tx_hash', result.hash);
         span.end('ok');
         written.push(address);
-        logger.info('sanctions-oracle: address written to denylist', { address, hash: result.hash });
+        logger.info('sanctions-oracle: address written to denylist', {
+          address,
+          hash: result.hash,
+        });
       } catch (err) {
         const durationMs = Date.now() - start;
         metrics.counter.inc('denylist_write', 'failure');
@@ -325,86 +334,93 @@ export interface RpcDenylistWriterOptions {
   /**
    * Optional backoff options for retry delays.
    */
-  backoffOptions?: any;
+  backoffOptions?: BackoffOptions;
 }
 
 // Kept behind the DenylistWriter interface (rather than called directly
 // from syncSanctionsToDenylist) so tests can inject a fake writer instead
 // of touching a live RPC endpoint.
-export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): DenylistWriter & { addToDenylistWithSource?: (address: string, source: string) => Promise<{ hash: string; auditLog?: AuditLogEntry }> } {
-  const { rpcUrl, networkPassphrase, contractId, sourceKeypair, auditLogger, maxRetries = 3, backoffOptions } =
-    options;
-  const server = new rpc.Server(rpcUrl);
+export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): DenylistWriter & {
+  addToDenylistWithSource?: (
+    address: string,
+    source: string,
+  ) => Promise<{ hash: string; auditLog?: AuditLogEntry }>;
+} {
+  const {
+    rpcUrl,
+    networkPassphrase,
+    contractId,
+    sourceKeypair,
+    auditLogger,
+    maxRetries = 3,
+    backoffOptions,
+  } = options;
+  const server = new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
   const contract = new Contract(contractId);
+
+  // Shared by both public methods below so the retry/backoff behavior around
+  // sendTransaction can't drift between the audited and non-audited paths.
+  async function buildPrepareSignAndSend(address: string): Promise<{ hash: string }> {
+    const account = await server.getAccount(sourceKeypair.publicKey());
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase,
+    })
+      .addOperation(contract.call('add_to_denylist', nativeToScVal(address, { type: 'address' })))
+      .setTimeout(30)
+      .build();
+
+    let prepared;
+    try {
+      prepared = await server.prepareTransaction(tx);
+    } catch (error) {
+      const err = error instanceof Error ? error.message : String(error);
+      throw new Error(`Failed to prepare transaction (simulation error): ${err}`);
+    }
+
+    prepared.sign(sourceKeypair);
+
+    let lastError;
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const sendResult = await server.sendTransaction(prepared);
+        return { hash: sendResult.hash };
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries - 1) {
+          const delayMs = computeBackoffDelayMs(attempt, backoffOptions);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+      }
+    }
+
+    const err = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(`Failed to send transaction after ${maxRetries} attempts: ${err}`);
+  }
 
   return {
     async addToDenylist(address: string): Promise<{ hash: string }> {
-      const account = await server.getAccount(sourceKeypair.publicKey());
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase,
-      })
-        .addOperation(contract.call('add_to_denylist', nativeToScVal(address, { type: 'address' })))
-        .setTimeout(30)
-        .build();
-
-      let prepared;
-      try {
-        prepared = await server.prepareTransaction(tx);
-      } catch (error) {
-        const err = error instanceof Error ? error.message : String(error);
-        throw new Error(`Failed to prepare transaction (simulation error): ${err}`);
-      }
-
-      prepared.sign(sourceKeypair);
-
-      let sendResult;
-      let lastError;
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        try {
-          sendResult = await server.sendTransaction(prepared);
-          return { hash: sendResult.hash };
-        } catch (error) {
-          lastError = error;
-          if (attempt < maxRetries - 1) {
-            const delayMs = computeBackoffDelayMs(attempt, backoffOptions);
-            await new Promise((resolve) => setTimeout(resolve, delayMs));
-          }
-        }
-      }
-
-      const err = lastError instanceof Error ? lastError.message : String(lastError);
-      throw new Error(`Failed to send transaction after ${maxRetries} attempts: ${err}`);
+      return buildPrepareSignAndSend(address);
     },
-    async addToDenylistWithSource(address: string, source: string): Promise<{ hash: string; auditLog?: AuditLogEntry }> {
-      const account = await server.getAccount(sourceKeypair.publicKey());
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase,
-      })
-        .addOperation(contract.call('add_to_denylist', nativeToScVal(address, { type: 'address' })))
-        .setTimeout(30)
-        .build();
-
-      const prepared = await server.prepareTransaction(tx);
-      prepared.sign(sourceKeypair);
-
-      const sendResult = await server.sendTransaction(prepared);
+    async addToDenylistWithSource(
+      address: string,
+      source: string,
+    ): Promise<{ hash: string; auditLog?: AuditLogEntry }> {
+      const { hash } = await buildPrepareSignAndSend(address);
 
       const auditEntry: AuditLogEntry = {
         address,
         timestamp: new Date().toISOString(),
         source,
-        txHash: sendResult.hash,
+        txHash: hash,
       };
 
       if (auditLogger) {
         await auditLogger(auditEntry);
       }
 
-      return { hash: sendResult.hash, auditLog: auditEntry };
+      return { hash, auditLog: auditEntry };
     },
   };
 }
@@ -554,7 +570,13 @@ export async function runCli(argv?: string[]): Promise<void> {
     sourceKeypair: Keypair.fromSecret(args.secretKey),
   });
 
-  const result = await syncSanctionsToDenylist({ provider, addresses, writer, dryRun: false, logger });
+  const result = await syncSanctionsToDenylist({
+    provider,
+    addresses,
+    writer,
+    dryRun: false,
+    logger,
+  });
   console.log(JSON.stringify(result, null, 2));
 }
 
