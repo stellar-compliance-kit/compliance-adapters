@@ -335,6 +335,11 @@ export interface RpcDenylistWriterOptions {
    * Optional backoff options for retry delays.
    */
   backoffOptions?: BackoffOptions;
+  /**
+   * Optional logger used to record an audit-logging failure without failing
+   * the write it accompanies. Defaults to a no-op logger.
+   */
+  logger?: Logger;
 }
 
 // Kept behind the DenylistWriter interface (rather than called directly
@@ -354,6 +359,7 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
     auditLogger,
     maxRetries = 3,
     backoffOptions,
+    logger = noopLogger,
   } = options;
   const server = new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
   const contract = new Contract(contractId);
@@ -417,7 +423,18 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
       };
 
       if (auditLogger) {
-        await auditLogger(auditEntry);
+        try {
+          await auditLogger(auditEntry);
+        } catch (error) {
+          // The on-chain write above already succeeded — an audit-logging
+          // failure must not fail this address's write or propagate up
+          // through syncSanctionsToDenylist's write loop.
+          logger.error('sanctions-oracle: audit logger failed after successful denylist write', {
+            address,
+            txHash: hash,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
 
       return { hash, auditLog: auditEntry };

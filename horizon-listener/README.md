@@ -110,27 +110,38 @@ const listener = new HorizonListener({
 ## Webhook signature verification
 
 When `HttpWebhookSender` is constructed with a `signingSecret`, every outbound
-request carries an `X-Signature` header of the form:
+request carries an `X-Timestamp` header and an `X-Signature` header of the
+form:
 
 ```
-X-Signature: sha256=<hex-encoded HMAC-SHA256 of the raw request body, keyed by signingSecret>
+X-Timestamp: <unix seconds at send time>
+X-Signature: sha256=<hex-encoded HMAC-SHA256 of "<X-Timestamp>.<raw request body>", keyed by signingSecret>
 ```
 
-The HMAC is computed over the exact JSON string sent as the request body
-(before any parsing), so a receiver must verify against the raw bytes, not a
-re-serialized version of the parsed body — re-serializing can change key
-order or whitespace and produce a different digest.
+The timestamp is folded into the signed material specifically so that a
+receiver can detect replayed requests: because contract event payloads are
+deterministic, a captured request with a valid signature could otherwise be
+replayed indefinitely. The HMAC is computed over
+`` `${timestamp}.${body}` `` where `body` is the exact JSON string sent as
+the request body (before any parsing), so a receiver must verify against the
+raw bytes, not a re-serialized version of the parsed body — re-serializing
+can change key order or whitespace and produce a different digest.
 
-A receiver should recompute the HMAC over the raw body with the shared
-secret and compare it to the header using a constant-time comparison (to
-avoid leaking the secret through timing differences), rejecting the request
-if they don't match or if the header is missing:
+A receiver must do two things to validate a request: recompute the HMAC over
+`<X-Timestamp>.<raw body>` and compare it to `X-Signature` using a
+constant-time comparison (to avoid leaking the secret through timing
+differences), **and** reject requests whose `X-Timestamp` falls outside a
+freshness window — a receiver should reject the request if they don't match,
+if either header is missing, or if the timestamp is stale:
 
 ```ts
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 
 const WEBHOOK_SIGNING_SECRET = process.env.WEBHOOK_SIGNING_SECRET!;
+// Reasonable default: tolerates delivery latency and retry backoff while
+// still bounding how long a captured request stays replayable.
+const MAX_TIMESTAMP_SKEW_SECONDS = 5 * 60;
 
 const app = express();
 
@@ -139,21 +150,38 @@ app.use(express.json({ verify: (req, _res, buf) => {
   (req as express.Request & { rawBody?: Buffer }).rawBody = buf;
 } }));
 
-function isValidSignature(rawBody: Buffer, header: string | undefined): boolean {
-  if (!header) return false;
+function isFreshTimestamp(timestampHeader: string | undefined): boolean {
+  if (!timestampHeader || !/^\d+$/.test(timestampHeader)) return false;
 
-  const expected = createHmac('sha256', WEBHOOK_SIGNING_SECRET).update(rawBody).digest('hex');
+  const timestamp = Number(timestampHeader);
+  const skewSeconds = Math.abs(Date.now() / 1000 - timestamp);
+  return skewSeconds <= MAX_TIMESTAMP_SKEW_SECONDS;
+}
+
+function isValidSignature(
+  rawBody: Buffer,
+  timestampHeader: string | undefined,
+  signatureHeader: string | undefined,
+): boolean {
+  if (!timestampHeader || !signatureHeader) return false;
+
+  const signedMaterial = Buffer.concat([Buffer.from(`${timestampHeader}.`), rawBody]);
+  const expected = createHmac('sha256', WEBHOOK_SIGNING_SECRET).update(signedMaterial).digest('hex');
   const expectedHeader = `sha256=${expected}`;
 
-  const a = Buffer.from(header);
+  const a = Buffer.from(signatureHeader);
   const b = Buffer.from(expectedHeader);
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
 app.post('/webhook', (req, res) => {
   const rawBody = (req as express.Request & { rawBody?: Buffer }).rawBody ?? Buffer.alloc(0);
+  const timestampHeader = req.header('X-Timestamp');
 
-  if (!isValidSignature(rawBody, req.header('X-Signature'))) {
+  if (
+    !isFreshTimestamp(timestampHeader) ||
+    !isValidSignature(rawBody, timestampHeader, req.header('X-Signature'))
+  ) {
     return res.sendStatus(401);
   }
 
@@ -163,8 +191,9 @@ app.post('/webhook', (req, res) => {
 app.listen(4000);
 ```
 
-If `signingSecret` is omitted, `HttpWebhookSender` sends requests without an
-`X-Signature` header, exactly as before this feature was added.
+If `signingSecret` is omitted, `HttpWebhookSender` sends requests without
+`X-Timestamp` or `X-Signature` headers, exactly as before this feature was
+added.
 
 ## Reconnect / backoff behavior
 
