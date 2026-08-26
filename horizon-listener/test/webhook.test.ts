@@ -46,7 +46,7 @@ describe('HttpWebhookSender', () => {
     expect(init.headers).toEqual({ 'Content-Type': 'application/json' });
   });
 
-  it('adds a correctly computed X-Signature header when a signing secret is configured', async () => {
+  it('adds X-Timestamp and a correctly computed X-Signature header when a signing secret is configured', async () => {
     const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
     const secret = 'test-secret';
     const sender = new HttpWebhookSender({
@@ -55,19 +55,29 @@ describe('HttpWebhookSender', () => {
       fetchImpl,
     });
 
-    const event = makeEvent();
-    await sender.send(event);
+    const fixedNowMs = 1_700_000_000_000;
+    jest.spyOn(Date, 'now').mockReturnValue(fixedNowMs);
+    try {
+      const event = makeEvent();
+      await sender.send(event);
 
-    const [, init] = fetchImpl.mock.calls[0];
-    const expectedSignature = `sha256=${createHmac('sha256', secret).update(init.body).digest('hex')}`;
+      const [, init] = fetchImpl.mock.calls[0];
+      const expectedTimestamp = String(Math.floor(fixedNowMs / 1000));
+      const expectedSignature = `sha256=${createHmac('sha256', secret)
+        .update(`${expectedTimestamp}.${init.body}`)
+        .digest('hex')}`;
 
-    expect(init.headers).toEqual({
-      'Content-Type': 'application/json',
-      'X-Signature': expectedSignature,
-    });
+      expect(init.headers).toEqual({
+        'Content-Type': 'application/json',
+        'X-Timestamp': expectedTimestamp,
+        'X-Signature': expectedSignature,
+      });
+    } finally {
+      jest.spyOn(Date, 'now').mockRestore();
+    }
   });
 
-  it('computes the documented signature for a known payload/secret pair', async () => {
+  it('computes the documented signature for a known payload/secret/timestamp triple', async () => {
     const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
     const sender = new HttpWebhookSender({
       url: 'http://localhost:9999/webhook',
@@ -75,22 +85,39 @@ describe('HttpWebhookSender', () => {
       fetchImpl,
     });
 
-    await sender.send(
-      makeEvent({
-        id: 'evt-known',
-        contractId: 'CDENYLISTGATE',
-        ledger: 42,
-        topic: ['denylist_added'],
-        value: { address: 'GADDR' },
-      }),
-    );
+    const fixedNowMs = 1_700_000_000_000; // -> X-Timestamp: "1700000000"
+    jest.spyOn(Date, 'now').mockReturnValue(fixedNowMs);
+    try {
+      await sender.send(
+        makeEvent({
+          id: 'evt-known',
+          contractId: 'CDENYLISTGATE',
+          ledger: 42,
+          topic: ['denylist_added'],
+          value: { address: 'GADDR' },
+        }),
+      );
+
+      const [, init] = fetchImpl.mock.calls[0];
+      expect(init.headers['X-Timestamp']).toBe('1700000000');
+      // Known-answer test: sha256 HMAC of "<timestamp>.<fixed body above>"
+      // under 'known-secret', pre-computed independently of the implementation.
+      expect(init.headers['X-Signature']).toBe(
+        'sha256=1c7748523c86084c5fb73969db62fe44c64bdbd28da9aa63987badff4f56b1ef',
+      );
+    } finally {
+      jest.spyOn(Date, 'now').mockRestore();
+    }
+  });
+
+  it('omits X-Timestamp when no signing secret is configured', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+    const sender = new HttpWebhookSender({ url: 'http://localhost:9999/webhook', fetchImpl });
+
+    await sender.send(makeEvent());
 
     const [, init] = fetchImpl.mock.calls[0];
-    // Known-answer test: sha256 HMAC of the fixed body above under
-    // 'known-secret', pre-computed independently of the implementation.
-    expect(init.headers['X-Signature']).toBe(
-      'sha256=faa29f8daafdc12e25edce9bbb0f6ad78fa793831b6fb949bfc77133282d32cf',
-    );
+    expect(init.headers['X-Timestamp']).toBeUndefined();
   });
 
   it('enables exactly-once delivery when webhook includes idempotency-key header', async () => {
@@ -324,5 +351,92 @@ describe('HttpWebhookSender', () => {
     await expect(sender.send(makeEvent())).rejects.toThrow();
 
     expect(fetchImpl).toHaveBeenCalledTimes(4); // initial + 3 default retries
+  });
+
+  it('does not retry a 400 response, even with retries budgeted', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status: 400 });
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      maxRetries: 3,
+    });
+
+    await expect(sender.send(makeEvent())).rejects.toThrow(/status 400/);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1); // no retries — permanent client error
+  });
+
+  it('does not retry a 401 response, even with retries budgeted', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status: 401 });
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      maxRetries: 3,
+    });
+
+    await expect(sender.send(makeEvent())).rejects.toThrow(/status 401/);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry a 404 response, even with retries budgeted', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status: 404 });
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      maxRetries: 3,
+    });
+
+    await expect(sender.send(makeEvent())).rejects.toThrow(/status 404/);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it('still retries 5xx responses up to maxRetries', async () => {
+    const fetchImpl = jest.fn().mockResolvedValue({ ok: false, status: 502 });
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      maxRetries: 2,
+    });
+
+    await expect(sender.send(makeEvent())).rejects.toThrow(/status 502/);
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3); // initial + 2 retries
+  });
+
+  it('still retries network errors up to maxRetries', async () => {
+    const fetchImpl = jest.fn().mockRejectedValue(new Error('Network connection failed'));
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      maxRetries: 2,
+    });
+
+    await expect(sender.send(makeEvent())).rejects.toThrow('Network connection failed');
+
+    expect(fetchImpl).toHaveBeenCalledTimes(3); // initial + 2 retries
+  });
+
+  it('recovers from a transient 5xx and succeeds without retrying past it', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      fetchImpl,
+      maxRetries: 3,
+    });
+
+    await expect(sender.send(makeEvent())).resolves.toBeUndefined();
+
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 });

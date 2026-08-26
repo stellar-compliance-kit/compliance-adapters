@@ -12,6 +12,7 @@
  * ========================================================================= */
 
 import { SanctionsProvider } from './SanctionsProvider';
+import { StrKey } from '@stellar/stellar-sdk';
 import * as fs from 'fs';
 
 const CSV_SOURCE = 'csv-watchlist-v1';
@@ -41,6 +42,12 @@ export class CsvSanctionsProvider implements SanctionsProvider {
         const parts = line.split(',');
         if (parts.length >= 1) {
           const address = parts[0].trim();
+          if (!StrKey.isValidEd25519PublicKey(address)) {
+            console.warn(
+              `sanctions-oracle: skipping invalid address at line ${i + 1} of ${this.csvPath}: "${address}" is not a valid Stellar G... address`,
+            );
+            continue;
+          }
           const source = parts.length >= 2 ? parts[1].trim() : CSV_SOURCE;
           this.flaggedAddresses.set(address, source);
         }

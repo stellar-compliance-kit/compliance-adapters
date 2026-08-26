@@ -13,17 +13,40 @@ export interface WebhookSender {
   send(event: RawContractEvent): Promise<void>;
 }
 
+/**
+ * Thrown when the webhook endpoint responds with a non-OK HTTP status.
+ * Carries the status code so callers (and the retry loop below) can tell a
+ * permanent client error (4xx) apart from a transient server error (5xx).
+ */
+class WebhookHttpError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = 'WebhookHttpError';
+  }
+}
+
 export interface HttpWebhookSenderOptions {
   url: string;
   /**
    * Shared secret used to sign outbound requests. When set, every request
-   * carries an `X-Signature` header (`sha256=<hex hmac>`) computed over the
-   * raw request body so receivers can verify the request came from this
-   * sender. See horizon-listener/README.md for the verification recipe.
+   * carries an `X-Timestamp` header (Unix seconds) and an `X-Signature`
+   * header (`sha256=<hex hmac>`) computed over `<timestamp>.<raw body>` so
+   * receivers can verify the request came from this sender *and* reject
+   * stale/replayed deliveries by enforcing a freshness window on the
+   * timestamp. See horizon-listener/README.md for the verification recipe.
    */
   signingSecret?: string;
   fetchImpl?: typeof fetch;
   timeoutMs?: number;
+  /**
+   * Maximum retry attempts (with exponential backoff) for transient
+   * failures: 5xx responses and network errors. A 4xx response is treated
+   * as a permanent client error (bad config, auth, etc.) and is never
+   * retried, regardless of this setting. Defaults to 3.
+   */
   maxRetries?: number;
   /**
    * Optional metrics registry.  Pass a `MetricsRegistry` instance to record
@@ -76,7 +99,9 @@ export class HttpWebhookSender implements WebhookSender {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
     if (this.signingSecret) {
-      headers['X-Signature'] = `sha256=${this.sign(body)}`;
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+      headers['X-Timestamp'] = timestamp;
+      headers['X-Signature'] = `sha256=${this.sign(timestamp, body)}`;
     }
 
     // The span covers the entire logical delivery (including retries), so it
@@ -125,8 +150,9 @@ export class HttpWebhookSender implements WebhookSender {
           if (!response.ok) {
             this.metrics.counter.inc('webhook', 'failure');
             this.metrics.histogram.observe('webhook', durationMs);
-            throw new Error(
+            throw new WebhookHttpError(
               `horizon-listener: webhook POST to ${this.url} failed with status ${response.status}`,
+              response.status,
             );
           }
 
@@ -141,13 +167,21 @@ export class HttpWebhookSender implements WebhookSender {
           }
         }
       } catch (error) {
-        if (!(error instanceof Error && error.message.includes('failed with status'))) {
+        const httpError = error instanceof WebhookHttpError ? error : undefined;
+        if (!httpError) {
           const durationMs = Date.now() - start;
           this.metrics.counter.inc('webhook', 'failure');
           this.metrics.histogram.observe('webhook', durationMs);
         }
         lastError = error instanceof Error ? error : new Error(String(error));
-        if (attempt === this.maxRetries) {
+
+        // 4xx responses are permanent client errors (bad config, auth, etc.)
+        // that will never succeed on retry, so fail fast instead of burning
+        // the retry budget. 5xx responses and network errors are treated as
+        // transient and keep retrying up to maxRetries.
+        const isPermanentClientError =
+          httpError !== undefined && httpError.status >= 400 && httpError.status < 500;
+        if (isPermanentClientError || attempt === this.maxRetries) {
           span.end('error', lastError);
           throw lastError;
         }
@@ -155,7 +189,9 @@ export class HttpWebhookSender implements WebhookSender {
     }
   }
 
-  private sign(body: string): string {
-    return createHmac('sha256', this.signingSecret!).update(body).digest('hex');
+  private sign(timestamp: string, body: string): string {
+    return createHmac('sha256', this.signingSecret!)
+      .update(`${timestamp}.${body}`)
+      .digest('hex');
   }
 }

@@ -41,7 +41,7 @@ describe('CsvSanctionsProvider', () => {
   it('flags a known CSV watchlist address', async () => {
     const provider = new CsvSanctionsProvider(csvPath);
     const result = await provider.checkAddress(
-      'GHBRPOIGF3CBFNOBM2O4RAK3VRJNVGFYGWWQC5HYFSXMECOSFOGYR5XK',
+      'GD7PQQDZ75ZIY3O3CZKO4P6NBRBDBYEM6PKROQUVKMXI6J2SAB4FWYAN',
     );
     expect(result.flagged).toBe(true);
     expect(result.source).toBe('csv-watchlist-v1');
@@ -58,5 +58,28 @@ describe('CsvSanctionsProvider', () => {
     expect(() => new CsvSanctionsProvider('/nonexistent/path.csv')).toThrow(
       'CSV file not found at path: /nonexistent/path.csv',
     );
+  });
+
+  it('skips a row whose address column is not a valid Stellar G... address, without stopping the load', async () => {
+    // The fixture's last row ("NOT-A-VALID-STELLAR-ADDRESS") is malformed;
+    // the rows before it must still load successfully.
+    const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      const provider = new CsvSanctionsProvider(csvPath);
+
+      const invalidResult = await provider.checkAddress('NOT-A-VALID-STELLAR-ADDRESS');
+      expect(invalidResult.flagged).toBe(false);
+
+      const validResult = await provider.checkAddress(
+        'GCSNJ6SE42RKXVFLWHFWRZKAWOVSTVVTZ2HBM2JV45NY3GGMB6PJBMXX',
+      );
+      expect(validResult.flagged).toBe(true);
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('NOT-A-VALID-STELLAR-ADDRESS'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });

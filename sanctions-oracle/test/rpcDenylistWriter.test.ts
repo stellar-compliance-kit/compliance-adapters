@@ -103,5 +103,32 @@ describe('createRpcDenylistWriter', () => {
       expect(mockSendTransaction).toHaveBeenCalledTimes(2);
       expect(auditLogger).not.toHaveBeenCalled();
     });
+
+    it('does not fail the write when the on-chain send succeeded but the audit logger rejects', async () => {
+      mockSendTransaction.mockResolvedValue({ hash: 'txhash-3' });
+
+      const auditLogger = jest.fn().mockRejectedValue(new Error('audit db unreachable'));
+      const writer = makeWriter({ auditLogger });
+
+      const result = await writer.addToDenylistWithSource!(TARGET_ADDRESS, 'OFAC-SDN');
+
+      expect(result.hash).toBe('txhash-3');
+      expect(auditLogger).toHaveBeenCalledTimes(1);
+    });
+
+    it('reports the audit logger failure through the injected logger instead of throwing', async () => {
+      mockSendTransaction.mockResolvedValue({ hash: 'txhash-4' });
+
+      const auditLogger = jest.fn().mockRejectedValue(new Error('audit db unreachable'));
+      const logger = { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() };
+      const writer = makeWriter({ auditLogger, logger });
+
+      await writer.addToDenylistWithSource!(TARGET_ADDRESS, 'OFAC-SDN');
+
+      expect(logger.error).toHaveBeenCalledWith(
+        expect.stringContaining('audit logger failed'),
+        expect.objectContaining({ address: TARGET_ADDRESS, txHash: 'txhash-4' }),
+      );
+    });
   });
 });
