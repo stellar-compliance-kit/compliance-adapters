@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
  * Minimal structured-logging interface shared across all compliance-adapter
  * packages.  Any object that satisfies this shape — console, pino, winston,
  * a test spy, etc. — can be injected wherever a `Logger` is accepted.
