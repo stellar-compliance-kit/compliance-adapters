@@ -1,6 +1,6 @@
 const express = require('express');
 const bodyParser = require('body-parser');
-const { createSep10Middleware } = require('sep10-auth');
+const { createSep10Middleware, generateChallenge } = require('sep10-auth');
 const { HorizonListener, HttpWebhookSender, RpcEventSource } = require('horizon-listener');
 const { MockSanctionsProvider, syncSanctionsToDenylist } = require('sanctions-oracle');
 const { Keypair, Networks } = require('@stellar/stellar-sdk');
@@ -8,7 +8,23 @@ const { Keypair, Networks } = require('@stellar/stellar-sdk');
 const app = express();
 app.use(bodyParser.json());
 
-const SERVER_ACCOUNT_ID = process.env.SERVER_ACCOUNT_ID || 'GABCDEFGHIJKLMNOPQRSTUVWXYZ23456789ABCDEFGH';
+// The server keypair signs SEP-10 challenge transactions in /challenge; its
+// public key must match SERVER_ACCOUNT_ID, which the middleware uses to
+// verify those same challenges in /private. Set SERVER_SECRET_KEY to a
+// stable value in any environment other than local dev.
+const SERVER_SECRET_KEY = process.env.SERVER_SECRET_KEY;
+let serverKeypair;
+if (SERVER_SECRET_KEY) {
+  serverKeypair = Keypair.fromSecret(SERVER_SECRET_KEY);
+} else {
+  serverKeypair = Keypair.random();
+  console.warn(
+    'SERVER_SECRET_KEY not set; using an ephemeral in-memory keypair for local development only. ' +
+      'This key is regenerated on every restart. Set SERVER_SECRET_KEY for a stable server identity.',
+  );
+}
+
+const SERVER_ACCOUNT_ID = process.env.SERVER_ACCOUNT_ID || serverKeypair.publicKey();
 const NETWORK_PASSPHRASE = process.env.NETWORK_PASSPHRASE || Networks.TESTNET;
 const HOME_DOMAIN = process.env.HOME_DOMAIN || 'localhost:3000';
 const WEB_AUTH_DOMAIN = process.env.WEB_AUTH_DOMAIN || 'localhost:3000';
@@ -61,8 +77,12 @@ app.get('/sync', async (req, res) => {
 
 app.get('/challenge', (req, res) => {
   const clientKeypair = Keypair.random();
-  const challenge = `SIMULATED-CHALLENGE-FOR-${clientKeypair.publicKey()}`;
-  res.json({ challenge, address: clientKeypair.publicKey() });
+  const challenge = generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+    homeDomain: HOME_DOMAIN,
+    webAuthDomain: WEB_AUTH_DOMAIN,
+    networkPassphrase: NETWORK_PASSPHRASE,
+  });
+  res.json({ ...challenge, address: clientKeypair.publicKey() });
 });
 
 const WEBHOOK_URL = process.env.WEBHOOK_URL || 'http://localhost:3000/webhook/events';

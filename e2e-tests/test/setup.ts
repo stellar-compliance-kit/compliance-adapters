@@ -32,8 +32,12 @@ export const TEST_CONFIG = {
   networkPassphrase: 'Standalone Network ; February 2017',
 
   // Throwaway test keypair, freshly funded via friendbot on every run against
-  // an ephemeral local network. PUBLIC/REUSABLE; never commit real secrets.
-  issuer: Keypair.fromSecret('SBLXYLBT346LAKZRPSQ73XJUQWIKTTO3GEICHFNJDQ3WORVHG5G5GVR4'),
+  // an ephemeral local network. Generated at setup time so no secret key is
+  // ever committed to source control; set E2E_ISSUER_SECRET to pin a stable
+  // identity instead (e.g. from the docker-compose test harness).
+  issuer: process.env.E2E_ISSUER_SECRET
+    ? Keypair.fromSecret(process.env.E2E_ISSUER_SECRET)
+    : Keypair.random(),
 
   // A syntactically valid (real checksum) Stellar address to submit through
   // the real on-chain add_to_denylist call. sanctions-oracle's
