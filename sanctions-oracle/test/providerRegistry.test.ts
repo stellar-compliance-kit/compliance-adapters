@@ -137,6 +137,41 @@ describe('ProviderRegistry', () => {
       const result = await registry.checkAddress(ADDRESS);
       expect(result.flagged).toBe(false);
     });
+
+    it('when two providers share the same priority, registration order is the tiebreaker', async () => {
+      const registry = new ProviderRegistry({ policy: 'priority-override' });
+      registry.register('first-registered', fakeProvider(false, 'list-a'), { priority: 5 });
+      registry.register('second-registered', fakeProvider(true, 'list-b'), { priority: 5 });
+
+      const detailed = await registry.checkAddressDetailed(ADDRESS);
+
+      expect(detailed.flagged).toBe(false);
+      expect(detailed.source).toBe('first-registered:list-a');
+    });
+
+    it('when three providers have no explicit priority, registration order determines the winner', async () => {
+      const registry = new ProviderRegistry({ policy: 'priority-override' });
+      registry.register('first', fakeProvider(true, 'flagged-list'));
+      registry.register('second', fakeProvider(false, 'clean-list'));
+      registry.register('third', fakeProvider(true, 'another-flagged-list'));
+
+      const detailed = await registry.checkAddressDetailed(ADDRESS);
+
+      expect(detailed.flagged).toBe(true);
+      expect(detailed.source).toBe('first:flagged-list');
+    });
+
+    it('when three providers have no explicit priority, changing registration order changes the winner', async () => {
+      const registry = new ProviderRegistry({ policy: 'priority-override' });
+      registry.register('second', fakeProvider(false, 'clean-list'));
+      registry.register('first', fakeProvider(true, 'flagged-list'));
+      registry.register('third', fakeProvider(true, 'another-flagged-list'));
+
+      const detailed = await registry.checkAddressDetailed(ADDRESS);
+
+      expect(detailed.flagged).toBe(false);
+      expect(detailed.source).toBe('second:clean-list');
+    });
   });
 
   describe('a provider that errors while others succeed', () => {
