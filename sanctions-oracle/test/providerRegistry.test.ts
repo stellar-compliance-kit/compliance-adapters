@@ -137,6 +137,34 @@ describe('ProviderRegistry', () => {
       const result = await registry.checkAddress(ADDRESS);
       expect(result.flagged).toBe(false);
     });
+
+    it('registration order is the tiebreaker when two providers share the same explicit priority', async () => {
+      // Both providers have priority: 1 — the one registered first wins because
+      // Array.prototype.sort is stable (ES2019+) and the input order reflects
+      // registration order via Map iteration.
+      const registry = new ProviderRegistry({ policy: 'priority-override' });
+      registry.register('first', fakeProvider(false, 'list-first'), { priority: 1 });
+      registry.register('second', fakeProvider(true, 'list-second'), { priority: 1 });
+
+      const detailed = await registry.checkAddressDetailed(ADDRESS);
+
+      expect(detailed.flagged).toBe(false);
+      expect(detailed.source).toBe('first:list-first');
+    });
+
+    it('registration order is the tiebreaker when three providers all use the default priority', async () => {
+      // None of the three providers specify a priority, so all receive
+      // DEFAULT_PRIORITY (Infinity). The first-registered provider wins.
+      const registry = new ProviderRegistry({ policy: 'priority-override' });
+      registry.register('alpha', fakeProvider(false, 'list-alpha'));
+      registry.register('beta', fakeProvider(true, 'list-beta'));
+      registry.register('gamma', fakeProvider(true, 'list-gamma'));
+
+      const detailed = await registry.checkAddressDetailed(ADDRESS);
+
+      expect(detailed.flagged).toBe(false);
+      expect(detailed.source).toBe('alpha:list-alpha');
+    });
   });
 
   describe('a provider that errors while others succeed', () => {
