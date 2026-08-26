@@ -41,11 +41,33 @@ export interface MockSanctionsProviderOptions {
 export class MockSanctionsProvider implements SanctionsProvider {
   private flaggedAddresses: Record<string, string>;
 
+  /**
+   * @param options When `options.flaggedAddresses` is a file path, the file is
+   * read synchronously, which blocks the event loop for the duration of the
+   * read. This is only safe to use at startup (e.g. building module-level
+   * config); prefer {@link MockSanctionsProvider.fromFile} inside a request
+   * path or anywhere else the blocking read would be a problem.
+   */
   constructor(options?: MockSanctionsProviderOptions) {
-    this.flaggedAddresses = this.loadFlaggedAddresses(options);
+    this.flaggedAddresses = MockSanctionsProvider.loadFlaggedAddressesSync(options);
   }
 
-  private loadFlaggedAddresses(options?: MockSanctionsProviderOptions): Record<string, string> {
+  /**
+   * Async equivalent of the file-path constructor form: reads
+   * `flaggedAddresses` (when it's a file path) with `fs.promises.readFile`
+   * instead of blocking the event loop. Non-file-path options
+   * (object/array/omitted) behave identically to the constructor and don't
+   * need this — use `new MockSanctionsProvider(options)` for those.
+   */
+  static async fromFile(options?: MockSanctionsProviderOptions): Promise<MockSanctionsProvider> {
+    const provider = new MockSanctionsProvider();
+    provider.flaggedAddresses = await MockSanctionsProvider.loadFlaggedAddressesAsync(options);
+    return provider;
+  }
+
+  private static loadFlaggedAddressesSync(
+    options?: MockSanctionsProviderOptions,
+  ): Record<string, string> {
     if (!options?.flaggedAddresses) {
       return MOCK_FLAGGED_ADDRESSES;
     }
@@ -57,17 +79,41 @@ export class MockSanctionsProvider implements SanctionsProvider {
       try {
         const fileContent = fs.readFileSync(flaggedAddresses, 'utf8');
         const parsed = JSON.parse(fileContent);
-        return this.normalizeAddresses(parsed);
+        return MockSanctionsProvider.normalizeAddresses(parsed);
       } catch (error) {
         throw new Error(`Failed to load flagged addresses from file ${flaggedAddresses}: ${error}`);
       }
     }
 
     // Handle direct object or array
-    return this.normalizeAddresses(flaggedAddresses);
+    return MockSanctionsProvider.normalizeAddresses(flaggedAddresses);
   }
 
-  private normalizeAddresses(
+  private static async loadFlaggedAddressesAsync(
+    options?: MockSanctionsProviderOptions,
+  ): Promise<Record<string, string>> {
+    if (!options?.flaggedAddresses) {
+      return MOCK_FLAGGED_ADDRESSES;
+    }
+
+    const flaggedAddresses = options.flaggedAddresses;
+
+    // Handle file path (string)
+    if (typeof flaggedAddresses === 'string') {
+      try {
+        const fileContent = await fs.promises.readFile(flaggedAddresses, 'utf8');
+        const parsed = JSON.parse(fileContent);
+        return MockSanctionsProvider.normalizeAddresses(parsed);
+      } catch (error) {
+        throw new Error(`Failed to load flagged addresses from file ${flaggedAddresses}: ${error}`);
+      }
+    }
+
+    // Handle direct object or array
+    return MockSanctionsProvider.normalizeAddresses(flaggedAddresses);
+  }
+
+  private static normalizeAddresses(
     data: Record<string, string> | string[],
   ): Record<string, string> {
     // If it's already an object with string values, use as-is
