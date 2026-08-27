@@ -1,4 +1,9 @@
 #!/usr/bin/env node
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 const { Octokit } = require("octokit");
 
 const repoOwner = process.env.GITHUB_OWNER || 'stellar-compliance-kit';

@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 export interface RetryOptions {
   /** Total attempts before giving up, including the first. Defaults to 3. */
   maxAttempts?: number;

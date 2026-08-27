@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
  * A store the SEP-10 middleware can consult to reject an otherwise-valid,
  * unexpired challenge transaction for a given Stellar address — e.g. because
  * an operator wants to cut off access immediately instead of waiting for the

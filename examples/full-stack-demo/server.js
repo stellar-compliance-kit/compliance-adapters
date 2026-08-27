@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const { createSep10Middleware, generateChallenge } = require('sep10-auth');

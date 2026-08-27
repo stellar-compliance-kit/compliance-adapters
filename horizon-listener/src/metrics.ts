@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
  * Lightweight, zero-dependency metrics for horizon-listener.
  *
  * Design goals

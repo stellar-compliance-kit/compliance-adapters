@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 import { HorizonListener, type HorizonListenerOptions } from './listener';
 import { RpcEventSource, type RpcEventSourceOptions } from './eventSource';
 import { HttpWebhookSender, type HttpWebhookSenderOptions } from './webhook';

@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
  * OpenTelemetry-compatible tracing for horizon-listener.
  *
  * Architecture
