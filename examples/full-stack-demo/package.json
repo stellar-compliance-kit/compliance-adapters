@@ -6,7 +6,7 @@
   },
   "dependencies": {
     "express": "^4.19.0",
-    "body-parser": "^1.20.3",
+    "body-parser": "^2.3.0",
     "@stellar/stellar-sdk": "^16.0.1"
   }
 }
