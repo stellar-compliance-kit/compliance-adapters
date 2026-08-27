@@ -30,6 +30,6 @@
     "@types/node": "^20.14.0",
     "babel-jest": "^29.7.0",
     "@babel/core": "^7.25.2",
-    "@babel/preset-env": "^7.25.4"
+    "@babel/preset-env": "^8.0.2"
   }
 }
