@@ -1,7 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const TARGET_DIRS = ['sep10-auth/src', 'sanctions-oracle/src', 'horizon-listener/src'];
+const TARGET_DIRS = ['logger/src', 'sep10-auth/src', 'sanctions-oracle/src', 'horizon-listener/src'];
 
 const REQUIRED_HEADER_PATTERNS = [
   /Copyright \(c\) \d{4} stellar-compliance-kit/i,

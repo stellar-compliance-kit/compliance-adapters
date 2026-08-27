@@ -138,32 +138,39 @@ describe('ProviderRegistry', () => {
       expect(result.flagged).toBe(false);
     });
 
-    it('registration order is the tiebreaker when two providers share the same explicit priority', async () => {
-      // Both providers have priority: 1 — the one registered first wins because
-      // Array.prototype.sort is stable (ES2019+) and the input order reflects
-      // registration order via Map iteration.
+    it('when two providers share the same priority, registration order is the tiebreaker', async () => {
       const registry = new ProviderRegistry({ policy: 'priority-override' });
-      registry.register('first', fakeProvider(false, 'list-first'), { priority: 1 });
-      registry.register('second', fakeProvider(true, 'list-second'), { priority: 1 });
+      registry.register('first-registered', fakeProvider(false, 'list-a'), { priority: 5 });
+      registry.register('second-registered', fakeProvider(true, 'list-b'), { priority: 5 });
 
       const detailed = await registry.checkAddressDetailed(ADDRESS);
 
       expect(detailed.flagged).toBe(false);
-      expect(detailed.source).toBe('first:list-first');
+      expect(detailed.source).toBe('first-registered:list-a');
     });
 
-    it('registration order is the tiebreaker when three providers all use the default priority', async () => {
-      // None of the three providers specify a priority, so all receive
-      // DEFAULT_PRIORITY (Infinity). The first-registered provider wins.
+    it('when three providers have no explicit priority, registration order determines the winner', async () => {
       const registry = new ProviderRegistry({ policy: 'priority-override' });
-      registry.register('alpha', fakeProvider(false, 'list-alpha'));
-      registry.register('beta', fakeProvider(true, 'list-beta'));
-      registry.register('gamma', fakeProvider(true, 'list-gamma'));
+      registry.register('first', fakeProvider(true, 'flagged-list'));
+      registry.register('second', fakeProvider(false, 'clean-list'));
+      registry.register('third', fakeProvider(true, 'another-flagged-list'));
+
+      const detailed = await registry.checkAddressDetailed(ADDRESS);
+
+      expect(detailed.flagged).toBe(true);
+      expect(detailed.source).toBe('first:flagged-list');
+    });
+
+    it('when three providers have no explicit priority, changing registration order changes the winner', async () => {
+      const registry = new ProviderRegistry({ policy: 'priority-override' });
+      registry.register('second', fakeProvider(false, 'clean-list'));
+      registry.register('first', fakeProvider(true, 'flagged-list'));
+      registry.register('third', fakeProvider(true, 'another-flagged-list'));
 
       const detailed = await registry.checkAddressDetailed(ADDRESS);
 
       expect(detailed.flagged).toBe(false);
-      expect(detailed.source).toBe('alpha:list-alpha');
+      expect(detailed.source).toBe('second:clean-list');
     });
   });
 
