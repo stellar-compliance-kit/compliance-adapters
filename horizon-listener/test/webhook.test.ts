@@ -498,4 +498,79 @@ describe('HttpWebhookSender', () => {
       expect(sentEvent.id).toBe('evt-ctx-test');
     });
   });
+
+  describe('metrics and tracer threading (issue #326)', () => {
+    it('accepts metrics option in the constructor', () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      const mockMetrics = { /* metrics registry mock */ } as any;
+
+      const sender = new HttpWebhookSender({
+        url: 'http://localhost:9999/webhook',
+        fetchImpl,
+        metrics: mockMetrics,
+      });
+
+      expect(sender).toBeDefined();
+    });
+
+    it('accepts tracer option in the constructor', () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      const mockTracer = { /* tracer mock */ } as any;
+
+      const sender = new HttpWebhookSender({
+        url: 'http://localhost:9999/webhook',
+        fetchImpl,
+        tracer: mockTracer,
+      });
+
+      expect(sender).toBeDefined();
+    });
+
+    it('accepts both metrics and tracer together', () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      const mockMetrics = { /* metrics registry mock */ } as any;
+      const mockTracer = { /* tracer mock */ } as any;
+
+      const sender = new HttpWebhookSender({
+        url: 'http://localhost:9999/webhook',
+        fetchImpl,
+        metrics: mockMetrics,
+        tracer: mockTracer,
+      });
+
+      expect(sender).toBeDefined();
+    });
+
+    it('allows metrics and tracer to be optional', () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+
+      const sender = new HttpWebhookSender({
+        url: 'http://localhost:9999/webhook',
+        fetchImpl,
+      });
+
+      expect(sender).toBeDefined();
+    });
+
+    it('sends events normally when metrics and tracer are provided', async () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      const mockMetrics = { /* metrics registry mock */ } as any;
+      const mockTracer = { /* tracer mock */ } as any;
+
+      const sender = new HttpWebhookSender({
+        url: 'http://localhost:9999/webhook',
+        fetchImpl,
+        metrics: mockMetrics,
+        tracer: mockTracer,
+      });
+
+      const event = makeEvent({ id: 'evt-metrics-trace-test' });
+      await sender.send(event);
+
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+      const [, init] = fetchImpl.mock.calls[0];
+      const sentEvent = JSON.parse(init.body).event;
+      expect(sentEvent.id).toBe('evt-metrics-trace-test');
+    });
+  });
 });
