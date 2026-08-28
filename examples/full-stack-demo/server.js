@@ -39,6 +39,12 @@ const sep10Middleware = createSep10Middleware({
   webAuthDomain: WEB_AUTH_DOMAIN,
 });
 
+// Unauthenticated health-check for container orchestrator liveness/readiness
+// probes and load balancer health checks.  Registered before any auth middleware.
+app.get('/health', (_req, res) => {
+  res.status(200).json({ status: 'ok' });
+});
+
 app.get('/public', (req, res) => {
   res.json({ message: 'public route' });
 });
@@ -129,8 +135,9 @@ const listener = new HorizonListener({
 
 app.listen(3000, async () => {
   console.log('Full-stack demo listening on http://localhost:3000');
-  console.log('Public route -> GET /public');
-  console.log('Protected route -> GET /private');
+  console.log('Health check      -> GET /health');
+  console.log('Public route      -> GET /public');
+  console.log('Protected route   -> GET /private');
   console.log('Sanctions sync demo -> GET /sync');
   console.log('Challenge simulation -> GET /challenge');
   console.log('Starting HorizonListener...');

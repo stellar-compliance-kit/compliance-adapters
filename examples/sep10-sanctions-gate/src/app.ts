@@ -86,6 +86,14 @@ export function createApp(options: GatedAppOptions): express.Application {
     next();
   };
 
+  // ── Health-check route ───────────────────────────────────────────────────
+  // Unauthenticated liveness probe for container orchestrators and load
+  // balancer health checks.  Must be registered before the SEP-10 middleware
+  // so it is never accidentally gated behind auth.
+  app.get('/health', (_req: Request, res: Response): void => {
+    res.status(200).json({ status: 'ok' });
+  });
+
   // ── Gated route ──────────────────────────────────────────────────────────
   // Apply both middleware in order: auth first, sanctions second.
   // Only requests that clear both checks reach the handler.
