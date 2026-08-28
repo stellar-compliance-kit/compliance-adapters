@@ -15,6 +15,7 @@ export {
   AuditLogger,
   SyncOptions,
   SyncResult,
+  FailedAddress,
   RpcDenylistWriterOptions,
 } from './sync';
 export { withRetry, RetryOptions } from './retry';
