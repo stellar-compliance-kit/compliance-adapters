@@ -63,7 +63,7 @@ console.log('Authenticated as:', result.address);
 **Library Behavior**:
 - `syncSanctionsToDenylist()`: May throw from provider implementations or writer operations
 - `SanctionsProvider.checkAddress()`: Returns `{ flagged: boolean, source: string }` - does not throw
-- `CsvSanctionsProvider`: Throws in constructor if CSV file not found
+- `CsvSanctionsProvider`: Never throws — a missing/unreadable CSV file, a malformed row, or an invalid address is logged via `console.warn` and skipped; affected addresses are simply treated as unflagged. A duplicate address with differing sources is aggregated (sources joined with `,`) rather than silently overwritten.
 - `RpcDenylistWriter.addToDenylist()`: May throw on RPC/network failures
 
 **Consumer Expectations**:
@@ -157,7 +157,7 @@ While the current approaches are context-appropriate, the following alignments w
 
 #### 2. sanctions-oracle: Separate CLI and Library Error Handling
 
-**Issue**: `CsvSanctionsProvider` throws in constructor, making it harder to use as a library
+**Issue**: `CsvSanctionsProvider` threw in constructor, making it harder to use as a library (resolved — see Implementation Status below)
 
 **Alignment**: 
 - Keep CLI exit code behavior for CLI usage

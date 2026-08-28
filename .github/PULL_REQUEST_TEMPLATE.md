@@ -24,6 +24,7 @@ Describe the testing you've performed to validate these changes:
 ## Checklist
 - [ ] Tests added or updated
 - [ ] Documentation updated
+- [ ] If this PR adds/changes a public export, the relevant package README has been updated
 - [ ] No breaking changes (or documented if applicable)
 - [ ] Code follows project style guidelines
 - [ ] Changes reviewed locally before submitting
