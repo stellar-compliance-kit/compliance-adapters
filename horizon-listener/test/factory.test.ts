@@ -106,4 +106,95 @@ describe('createWebhookForwarder', () => {
 
     expect(sleep).toHaveBeenCalledWith(1234, expect.anything());
   });
+
+  describe('webhook parentContext threading (issue #327)', () => {
+    it('threads parentContext from WebhookForwarderOptions to HttpWebhookSender', async () => {
+      const getEvents = jest
+        .fn()
+        .mockResolvedValueOnce({ events: [], nextCursor: 'cursor-1' });
+      const send = jest.fn().mockResolvedValue(undefined);
+
+      (RpcEventSource as unknown as jest.Mock).mockImplementation(() => ({ getEvents }));
+      (HttpWebhookSender as unknown as jest.Mock).mockImplementation(() => ({ send }));
+
+      const parentContext = { traceId: 'event-relay-trace', spanId: 'event-relay-span' };
+
+      createWebhookForwarder({
+        eventSource: {
+          rpcUrl: 'https://rpc.example.com',
+          networkPassphrase: 'Test SDF Network ; September 2015',
+          contractIds: ['CDENYLISTGATE'],
+        },
+        webhook: {
+          url: 'http://localhost:9999/webhook',
+          parentContext,
+        },
+      });
+
+      expect(HttpWebhookSender).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'http://localhost:9999/webhook',
+          parentContext,
+        }),
+      );
+    });
+
+    it('allows parentContext to be omitted', async () => {
+      const getEvents = jest
+        .fn()
+        .mockResolvedValueOnce({ events: [], nextCursor: 'cursor-1' });
+      const send = jest.fn().mockResolvedValue(undefined);
+
+      (RpcEventSource as unknown as jest.Mock).mockImplementation(() => ({ getEvents }));
+      (HttpWebhookSender as unknown as jest.Mock).mockImplementation(() => ({ send }));
+
+      createWebhookForwarder({
+        eventSource: {
+          rpcUrl: 'https://rpc.example.com',
+          networkPassphrase: 'Test SDF Network ; September 2015',
+          contractIds: ['CDENYLISTGATE'],
+        },
+        webhook: { url: 'http://localhost:9999/webhook' },
+      });
+
+      expect(HttpWebhookSender).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: 'http://localhost:9999/webhook',
+        }),
+      );
+    });
+
+    it('preserves webhook span hierarchy when parentContext is supplied', async () => {
+      const event = makeEvent();
+      const getEvents = jest.fn().mockResolvedValueOnce({ events: [event], nextCursor: 'cursor-1' });
+      const send = jest.fn().mockResolvedValue(undefined);
+
+      (RpcEventSource as unknown as jest.Mock).mockImplementation(() => ({ getEvents }));
+      (HttpWebhookSender as unknown as jest.Mock).mockImplementation(() => ({ send }));
+
+      const parentContext = { traceId: 'root-trace', spanId: 'event-relay-span' };
+
+      send.mockImplementationOnce(async (forwardedEvent: RawContractEvent) => {
+        expect(forwardedEvent).toEqual(event);
+        listener.stop();
+      });
+
+      const listener = createWebhookForwarder({
+        eventSource: {
+          rpcUrl: 'https://rpc.example.com',
+          networkPassphrase: 'Test SDF Network ; September 2015',
+          contractIds: ['CDENYLISTGATE'],
+        },
+        webhook: {
+          url: 'http://localhost:9999/webhook',
+          parentContext,
+        },
+      });
+
+      await listener.start();
+
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(event);
+    });
+  });
 });

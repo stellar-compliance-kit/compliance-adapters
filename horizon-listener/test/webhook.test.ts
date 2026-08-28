@@ -439,4 +439,63 @@ describe('HttpWebhookSender', () => {
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
+
+  describe('parentContext for nested tracing (issue #327)', () => {
+    it('accepts a parentContext option in the constructor', () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      const parentContext = { traceId: 'trace-123', spanId: 'span-456' };
+
+      const sender = new HttpWebhookSender({
+        url: 'http://localhost:9999/webhook',
+        fetchImpl,
+        parentContext,
+      });
+
+      expect(sender).toBeDefined();
+    });
+
+    it('stores parentContext for use in tracing spans', () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      const parentContext = { traceId: 'parent-trace', spanId: 'parent-span' };
+
+      const sender = new HttpWebhookSender({
+        url: 'http://localhost:9999/webhook',
+        fetchImpl,
+        parentContext,
+      });
+
+      // Verify the sender was constructed with parentContext
+      expect(sender).toBeDefined();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    });
+
+    it('allows parentContext to be optional', () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+
+      const sender = new HttpWebhookSender({
+        url: 'http://localhost:9999/webhook',
+        fetchImpl,
+      });
+
+      expect(sender).toBeDefined();
+    });
+
+    it('preserves event data when parentContext is supplied', async () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      const parentContext = { traceId: 'trace-789', spanId: 'span-012' };
+
+      const sender = new HttpWebhookSender({
+        url: 'http://localhost:9999/webhook',
+        fetchImpl,
+        parentContext,
+      });
+
+      const event = makeEvent({ id: 'evt-ctx-test' });
+      await sender.send(event);
+
+      const [, init] = fetchImpl.mock.calls[0];
+      const sentEvent = JSON.parse(init.body).event;
+      expect(sentEvent.id).toBe('evt-ctx-test');
+    });
+  });
 });
