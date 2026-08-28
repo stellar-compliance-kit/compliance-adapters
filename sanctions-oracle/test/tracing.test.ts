@@ -8,7 +8,7 @@ import { syncSanctionsToDenylist, DenylistWriter } from '../src/sync';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 
 const FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
-const CLEAN_ADDRESS = 'GDNOTPRESENTINANYMOCKWATCHLISTAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const CLEAN_ADDRESS = 'GDUMBFZF42V5HQCHSHZE3UHUUMDJPPLA6YLFAQG7NWAUHZBZSBJY4AT3';
 
 function makeTracer(opts: TracingOptions = {}): { tracer: DefaultTracer; spans: SpanData[] } {
   const spans: SpanData[] = [];

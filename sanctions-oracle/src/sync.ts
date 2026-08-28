@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import {
   Contract,
   Keypair,
+  StrKey,
   TransactionBuilder,
   BASE_FEE,
   nativeToScVal,
@@ -14,6 +15,7 @@ import {
 } from '@stellar/stellar-sdk';
 import { type Logger, noopLogger, consoleLogger } from '@compliance-adapters/logger';
 import { SanctionsProvider } from './SanctionsProvider';
+import { SyncCheckpointStore } from './checkpoint';
 import { MockSanctionsProvider } from './mockProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
@@ -142,6 +144,21 @@ export interface SyncOptions {
    * tracer; the span will carry only phase and outcome attributes.
    */
   tracer?: AnyTracer;
+  /**
+   * Optional checkpoint store that makes a large sync resumable after a crash.
+   * As each address is finished, it is recorded via `checkpoint.markComplete`
+   * (clean addresses right after the provider check; flagged addresses only
+   * once the denylist write succeeds). Pass {@link SyncOptions.resume} on a
+   * later run to skip everything already recorded.
+   */
+  checkpoint?: SyncCheckpointStore;
+  /**
+   * When true and a {@link SyncOptions.checkpoint} is provided, addresses the
+   * checkpoint already reports as complete are skipped (returned in
+   * {@link SyncResult.skipped}) instead of being re-checked and re-written.
+   * Defaults to false.
+   */
+  resume?: boolean;
 }
 
 /**
@@ -156,6 +173,18 @@ export interface SyncResult {
   written: string[];
   /** Addresses whose provider check failed on every retry attempt. */
   failed: string[];
+  /**
+   * Input entries that are not valid Stellar Ed25519 public keys (StrKey
+   * `G...`). These are never checked against the provider — a malformed entry
+   * (typo, truncated paste, a non-Stellar identifier) is reported here rather
+   * than silently landing in neither `flagged` nor `failed`.
+   */
+  invalid: string[];
+  /**
+   * Addresses skipped because a {@link SyncOptions.checkpoint} already recorded
+   * them as complete and {@link SyncOptions.resume} was set. Empty otherwise.
+   */
+  skipped: string[];
   /** Whether this was a dry-run (read-only) operation. */
   dryRun: boolean;
 }
@@ -208,18 +237,57 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     concurrency,
     metrics = new NoopMetricsRegistry(),
     tracer = new NoopTracer(),
+    checkpoint,
+    resume = false,
   } = options;
 
   logger.info('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
 
   const uniqueAddresses = Array.from(new Set(addresses));
+
+  // Reject malformed input up front so a typo / truncated paste / non-Stellar
+  // identifier is reported distinctly instead of being checked and quietly
+  // landing in neither `flagged` nor `failed`.
+  const invalid: string[] = [];
+  const validAddresses: string[] = [];
+  for (const address of uniqueAddresses) {
+    if (StrKey.isValidEd25519PublicKey(address)) {
+      validAddresses.push(address);
+    } else {
+      invalid.push(address);
+    }
+  }
+  if (invalid.length > 0) {
+    logger.warn('sanctions-oracle: skipping malformed addresses', { count: invalid.length });
+  }
+
+  // On a resume run, drop anything a prior run already finished.
+  const skipped: string[] = [];
+  let pendingAddresses = validAddresses;
+  if (resume && checkpoint) {
+    pendingAddresses = [];
+    for (const address of validAddresses) {
+      if (await checkpoint.isComplete(address)) {
+        skipped.push(address);
+      } else {
+        pendingAddresses.push(address);
+      }
+    }
+    if (skipped.length > 0) {
+      logger.info('sanctions-oracle: resuming sync', {
+        skipped: skipped.length,
+        pending: pendingAddresses.length,
+      });
+    }
+  }
+
   const flagged: string[] = [];
   const flaggedWithSource: FlaggedAddressWithSource[] = [];
   const failed: string[] = [];
   let checked = 0;
 
   await executeConcurrent(
-    uniqueAddresses,
+    pendingAddresses,
     async (address) => {
       const start = Date.now();
       const span = tracer.startSpan('address_check');
@@ -239,6 +307,11 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         if (result.flagged) {
           flagged.push(address);
           flaggedWithSource.push({ address, source: result.source });
+        } else {
+          // Clean address: nothing left to do for it, so it can be checkpointed
+          // now. Flagged addresses are checkpointed only after a successful
+          // write (below) so an interrupted write is retried on resume.
+          await checkpoint?.markComplete(address);
         }
       } catch (err) {
         const durationMs = Date.now() - start;
@@ -250,7 +323,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         checked += 1;
         if (checked % progressInterval === 0) {
           logger.debug(
-            `sanctions-oracle: progress ${checked}/${uniqueAddresses.length} addresses checked`,
+            `sanctions-oracle: progress ${checked}/${pendingAddresses.length} addresses checked`,
           );
         }
       }
@@ -293,6 +366,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         span.setAttribute('denylist_write.tx_hash', result.hash);
         span.end('ok');
         written.push(address);
+        await checkpoint?.markComplete(address);
         logger.info('sanctions-oracle: address written to denylist', {
           address,
           hash: result.hash,
@@ -308,10 +382,12 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   }
 
   return {
-    checked: uniqueAddresses.length,
+    checked: pendingAddresses.length,
     flagged,
     written,
     failed,
+    invalid,
+    skipped,
     dryRun,
   };
 }

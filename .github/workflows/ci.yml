@@ -43,6 +43,11 @@ jobs:
       - name: Unit Tests
         run: npm test -- --coverage
 
+      - name: CLI Wrapper Integration Tests
+        # Spawns bin/compliance-adapters.js as a child process end-to-end
+        # (issue #345). Needs the sanctions-oracle build produced above.
+        run: npm run test:cli
+
       - name: Report Coverage
         if: always()
         run: node scripts/report-coverage.js

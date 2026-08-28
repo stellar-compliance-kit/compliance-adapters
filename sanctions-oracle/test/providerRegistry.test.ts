@@ -2,7 +2,9 @@ import { SanctionsProvider } from '../src/SanctionsProvider';
 import { ProviderRegistry, ProviderRegistryAllProvidersFailedError } from '../src/ProviderRegistry';
 import { syncSanctionsToDenylist, DenylistWriter } from '../src/sync';
 
-const ADDRESS = 'GTESTADDRESSAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+// A valid Stellar Ed25519 StrKey (syncSanctionsToDenylist rejects malformed
+// input before it reaches the provider — see issue #342).
+const ADDRESS = 'GB3RCZ4Q3OLLWLM2VUVA23MZNOZCAQSOADHQSHMFXXRXYR7427PTR4DU';
 
 function fakeProvider(flagged: boolean, source: string): SanctionsProvider {
   return {
