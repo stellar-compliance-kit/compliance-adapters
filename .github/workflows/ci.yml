@@ -37,6 +37,9 @@ jobs:
       - name: Check License Headers
         run: npm run check:license
 
+      - name: Check Root Changelog
+        run: npm run check:changelog
+
       - name: Build
         run: npm run build
 

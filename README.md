@@ -212,13 +212,20 @@ Then to version packages and generate changelog entries:
 npm run version
 ```
 
-After review, publish releases with:
+After review, prepare the root changelog entry before publishing:
+
+1. Move the notes under `[Unreleased]` in [`CHANGELOG.md`](./CHANGELOG.md) into a dated heading matching the version in the root `package.json`.
+2. Leave `[Unreleased]` empty.
+3. Run the release check and publish:
 
 ```bash
+npm run check:changelog
 npm run release
 ```
 
-Changesets will manage consistent version bumps across `sep10-auth`, `sanctions-oracle`, and `horizon-listener`.
+The release command repeats the check so a release cannot be published without a matching root
+changelog entry. Changesets will manage consistent version bumps across `sep10-auth`,
+`sanctions-oracle`, and `horizon-listener`.
 This repo participates in the [Drips Wave](https://www.drips.network/) Stellar Program and is
 deliberately kept full of small, well-scoped issues. Open issues are labeled by complexity
 (`complexity: trivial`, `complexity: medium`, `complexity: high`) so you can pick work that

@@ -41,7 +41,8 @@ npm test --workspace=sep10-auth
 2. Make your change, keeping it scoped to the linked issue.
 3. Add or update tests — PRs that touch behavior without test coverage will be asked to add it.
 4. Run `npm run lint` and `npm test` locally before opening a PR.
-5. Open a PR referencing the issue number (`Fixes #123`) and describe what you changed and why.
+5. For release-related changes, add notes under `[Unreleased]` in the root `CHANGELOG.md`; maintainer release preparation moves those notes into a dated versioned entry.
+6. Open a PR referencing the issue number (`Fixes #123`) and describe what you changed and why.
 
 ## Branch protection (recommended)
 
