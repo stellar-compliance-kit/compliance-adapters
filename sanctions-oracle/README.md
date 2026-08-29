@@ -67,6 +67,21 @@ Anything conforming to this interface — a REST client, a cache in front of
 multiple upstream lists, a local CSV loader — can be passed to
 `syncSanctionsToDenylist` in place of `MockSanctionsProvider`.
 
+## Cache and concurrency behavior
+
+`syncSanctionsToDenylist` supports both an optional `cache` (`ProviderResultCache`)
+and a `concurrency` limit. When the same address is checked concurrently, the
+implementation coalesces duplicate in-flight lookups so only one underlying
+`provider.checkAddress(address)` call is issued for that address until the result
+is cached or fails. This means a shared cache and a bounded concurrency limit work
+well together, and the same address is still treated as a single logical check in
+`SyncResult.checked` even if several tasks race.
+
+This is intentionally documented behavior rather than relying on the input array
+being de-duplicated in advance; the per-address check is now safe even if a caller
+passes the same address multiple times or two tasks reach the same cache miss at
+once.
+
 ## Running multiple providers with `ProviderRegistry`
 
 Real deployments often want to check an address against more than one

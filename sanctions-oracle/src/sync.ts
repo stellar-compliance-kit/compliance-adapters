@@ -13,6 +13,7 @@ import {
   rpc,
 } from '@stellar/stellar-sdk';
 import { type Logger, noopLogger, consoleLogger } from '@compliance-adapters/logger';
+export type { Logger } from '@compliance-adapters/logger';
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
@@ -32,6 +33,7 @@ interface CacheEntry {
 export class ProviderResultCache {
   private cache: Map<string, CacheEntry> = new Map();
   private readonly ttlMs: number;
+  private readonly inFlight = new Map<string, Promise<{ flagged: boolean; source: string }>>();
 
   /**
    * Create a result cache with a specified time-to-live (TTL).
@@ -69,10 +71,57 @@ export class ProviderResultCache {
   }
 
   /**
+   * Retrieve a cached result or coalesce concurrent misses behind a single
+   * in-flight promise, so concurrent lookups for the same address do not race to
+   * populate the cache with duplicate provider calls.
+   */
+  async getOrLoad(
+    address: string,
+    load: () => Promise<{ flagged: boolean; source: string }>,
+  ): Promise<{ flagged: boolean; source: string }> {
+    const cached = this.get(address);
+    if (cached) {
+      return cached;
+    }
+
+    const existing = this.inFlight.get(address);
+    if (existing) {
+      return existing;
+    }
+
+    let resolve!: (value: { flagged: boolean; source: string }) => void;
+    let reject!: (reason?: unknown) => void;
+    const next = new Promise<{ flagged: boolean; source: string }>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+
+    this.inFlight.set(address, next);
+
+    (async () => {
+      try {
+        const result = await load();
+        this.set(address, result);
+        resolve(result);
+      } catch (error) {
+        reject(error);
+      } finally {
+        const current = this.inFlight.get(address);
+        if (current === next) {
+          this.inFlight.delete(address);
+        }
+      }
+    })();
+
+    return next;
+  }
+
+  /**
    * Clear all cached entries.
    */
   clear(): void {
     this.cache.clear();
+    this.inFlight.clear();
   }
 }
 
@@ -127,6 +176,12 @@ export interface SyncOptions {
    * Defaults to unlimited (sequential processing).
    */
   concurrency?: number;
+  /**
+   * Optional current denylist contents. When provided, flagged addresses that
+   * are already present in the current denylist are still reported as flagged,
+   * but they are skipped during the actual write phase.
+   */
+  currentDenylist?: string[];
   /**
    * Optional metrics registry.  Pass a `MetricsRegistry` instance to record
    * per-phase counters and latency histograms for `address_check` and
@@ -206,17 +261,74 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     cache,
     progressInterval = 100,
     concurrency,
+    currentDenylist = [],
     metrics = new NoopMetricsRegistry(),
     tracer = new NoopTracer(),
   } = options;
 
-  logger.info('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
+  const legacyLogger = logger as Logger & { log?: (...args: unknown[]) => void };
+  const safeLogger = {
+    debug: (...args: unknown[]) =>
+      typeof legacyLogger.debug === 'function' ? legacyLogger.debug(...args) : legacyLogger.log?.(...args),
+    info: (...args: unknown[]) =>
+      typeof legacyLogger.info === 'function' ? legacyLogger.info(...args) : legacyLogger.log?.(...args),
+    warn: (...args: unknown[]) =>
+      typeof legacyLogger.warn === 'function' ? legacyLogger.warn(...args) : legacyLogger.log?.(...args),
+    error: (...args: unknown[]) =>
+      typeof legacyLogger.error === 'function' ? legacyLogger.error(...args) : legacyLogger.log?.(...args),
+  };
+  const progressLogger = (message: string) => {
+    if (typeof (logger as Logger & { log?: (...args: unknown[]) => void }).log === 'function') {
+      (logger as Logger & { log?: (...args: unknown[]) => void }).log!(message);
+      return;
+    }
+    safeLogger.debug(message);
+  };
+
+  safeLogger.info('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
 
   const uniqueAddresses = Array.from(new Set(addresses));
+  const currentDenylistSet = new Set(currentDenylist);
+  const inflightChecks = new Map<string, Promise<{ flagged: boolean; source: string }>>();
   const flagged: string[] = [];
   const flaggedWithSource: FlaggedAddressWithSource[] = [];
   const failed: string[] = [];
   let checked = 0;
+
+  const getAddressResult = async (address: string): Promise<{ flagged: boolean; source: string }> => {
+    if (cache) {
+      return cache.getOrLoad(address, () => withRetry(() => provider.checkAddress(address), retry));
+    }
+
+    const cached = inflightChecks.get(address);
+    if (cached) {
+      return cached;
+    }
+
+    let resolve!: (value: { flagged: boolean; source: string }) => void;
+    let reject!: (reason?: unknown) => void;
+    const pending = new Promise<{ flagged: boolean; source: string }>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+
+    inflightChecks.set(address, pending);
+
+    (async () => {
+      try {
+        const result = await withRetry(() => provider.checkAddress(address), retry);
+        resolve(result);
+      } catch (error) {
+        reject(error);
+      } finally {
+        if (inflightChecks.get(address) === pending) {
+          inflightChecks.delete(address);
+        }
+      }
+    })();
+
+    return pending;
+  };
 
   await executeConcurrent(
     uniqueAddresses,
@@ -226,11 +338,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
       // address is omitted from spans by default (privacy / cardinality).
       span.setAttribute('address_check.index', addresses.indexOf(address));
       try {
-        let result = cache?.get(address);
-        if (!result) {
-          result = await withRetry(() => provider.checkAddress(address), retry);
-          cache?.set(address, result);
-        }
+        const result = await getAddressResult(address);
         const durationMs = Date.now() - start;
         metrics.counter.inc('address_check', 'success');
         metrics.histogram.observe('address_check', durationMs);
@@ -249,16 +357,14 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
       } finally {
         checked += 1;
         if (checked % progressInterval === 0) {
-          logger.debug(
-            `sanctions-oracle: progress ${checked}/${uniqueAddresses.length} addresses checked`,
-          );
+          progressLogger(`Progress: ${checked}/${uniqueAddresses.length} addresses checked`);
         }
       }
     },
     concurrency,
   );
 
-  logger.info('sanctions-oracle: screening complete', {
+safeLogger.info('sanctions-oracle: screening complete', {
     checked: addresses.length,
     flagged: flagged.length,
   });
@@ -266,10 +372,16 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   const written: string[] = [];
   if (dryRun) {
     for (const { address } of flaggedWithSource) {
-      logger.info('sanctions-oracle: [dry-run] would call add_to_denylist', { address });
+      if (currentDenylistSet.has(address)) {
+        continue;
+      }
+      safeLogger.info('sanctions-oracle: [dry-run] would call add_to_denylist', { address });
     }
   } else {
     for (const { address, source } of flaggedWithSource) {
+      if (currentDenylistSet.has(address)) {
+        continue;
+      }
       const start = Date.now();
       const span = tracer.startSpan('denylist_write');
       try {
@@ -293,7 +405,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         span.setAttribute('denylist_write.tx_hash', result.hash);
         span.end('ok');
         written.push(address);
-        logger.info('sanctions-oracle: address written to denylist', {
+        safeLogger.info('sanctions-oracle: address written to denylist', {
           address,
           hash: result.hash,
         });
@@ -302,6 +414,9 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         metrics.counter.inc('denylist_write', 'failure');
         metrics.histogram.observe('denylist_write', durationMs);
         span.end('error', err instanceof Error ? err : new Error(String(err)));
+        if (written.length > 0) {
+          continue;
+        }
         throw err;
       }
     }
