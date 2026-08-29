@@ -150,4 +150,21 @@ describe('CsvSanctionsProvider', () => {
       expect(result.source).toBe('csv-watchlist-v1');
     });
   });
+
+  describe('injectable logger', () => {
+    it('routes load warnings to a supplied logger instead of console', () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      const logger = { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() };
+      try {
+        new CsvSanctionsProvider('/nonexistent/path.csv', { logger });
+
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining('CSV file not found at path: /nonexistent/path.csv'),
+        );
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
 });
