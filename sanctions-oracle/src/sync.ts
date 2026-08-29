@@ -316,7 +316,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   };
 }
 
-export interface RpcDenylistWriterOptions {
+interface RpcDenylistWriterOptions {
   rpcUrl: string;
   networkPassphrase: string;
   contractId: string;
