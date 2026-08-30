@@ -17,6 +17,8 @@ export {
   SyncOptions,
   SyncResult,
   RpcDenylistWriterOptions,
+  CliArgs,
+  toSafeLogString,
 } from './sync';
 export { withRetry, RetryOptions } from './retry';
 export {

@@ -66,6 +66,11 @@ console.log('Authenticated as:', result.address);
 - `CsvSanctionsProvider`: Throws in constructor if CSV file not found
 - `RpcDenylistWriter.addToDenylist()`: May throw on RPC/network failures
 
+**Logging Convention**:
+- `CliArgs.secretKey` is sensitive; never log the raw `CliArgs` object. Use
+  `toSafeLogString(args)` (from `sync.ts`), which masks `secretKey`, in any
+  debug logging of parsed args.
+
 **Consumer Expectations**:
 - **CLI users**: Check `process.exitCode` after execution; stderr contains error details
 - **Library users**: Wrap `syncSanctionsToDenylist` in try/catch; provider implementations should not throw

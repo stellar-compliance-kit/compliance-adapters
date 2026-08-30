@@ -504,6 +504,14 @@ export interface CliArgs {
   rateLimit?: boolean;
 }
 
+/**
+ * Returns a copy of `args` safe for logging, with `secretKey` masked.
+ * Use this instead of logging the raw `CliArgs` object.
+ */
+export function toSafeLogString(args: CliArgs): string {
+  return JSON.stringify({ ...args, secretKey: args.secretKey ? '[REDACTED]' : undefined });
+}
+
 export function parseArgs(argv: string[]): CliArgs {
   const args: CliArgs = { dryRun: false };
   for (let i = 0; i < argv.length; i += 1) {
@@ -559,7 +567,9 @@ OPTIONS:
   --contract-id <id>          Soroban contract ID (required for live sync)
   --rpc-url <url>             Soroban RPC endpoint URL (required for live sync)
   --network-passphrase <str>  Network passphrase (required for live sync)
-  --secret-key <key>          Source account secret key (required for live sync)
+  --secret-key <key>          Source account secret key (required for live sync unless
+                               SANCTIONS_ORACLE_SECRET_KEY is set; discouraged outside
+                               local testing since it is visible in shell history/process lists)
   --csv <path>                Use a CsvSanctionsProvider backed by the given CSV file
   --provider-module <path>    Dynamically import a module whose default export is a
                                SanctionsProvider to use instead of the mock/CSV provider
@@ -567,17 +577,19 @@ OPTIONS:
   --dry-run                   Preview output without writing to the contract
   --help, -h                  Show this help message
 
+ENVIRONMENT:
+  SANCTIONS_ORACLE_SECRET_KEY  Source account secret key (preferred over --secret-key)
+
 EXAMPLES:
   # Dry-run mode: check addresses without writing
   sanctions-oracle sync --addresses addresses.json --dry-run
 
-  # Live mode: sync flagged addresses to contract
-  sanctions-oracle sync \\
+  # Live mode: sync flagged addresses to contract (preferred, via env var)
+  SANCTIONS_ORACLE_SECRET_KEY=SBXXXX sanctions-oracle sync \\
     --addresses addresses.json \\
     --contract-id CXXXX \\
     --rpc-url https://soroban-testnet.stellar.org \\
-    --network-passphrase "Test SDF Network ; September 2015" \\
-    --secret-key SBXXXX
+    --network-passphrase "Test SDF Network ; September 2015"
   `);
 }
 
@@ -663,9 +675,14 @@ export async function runCli(argv?: string[]): Promise<void> {
     return;
   }
 
-  if (!args.contractId || !args.rpcUrl || !args.networkPassphrase || !args.secretKey) {
+  // Prefer the environment variable over --secret-key: CLI args are visible
+  // in shell history and process listings (e.g. `ps`), which the flag alone
+  // is vulnerable to.
+  const secretKey = process.env.SANCTIONS_ORACLE_SECRET_KEY ?? args.secretKey;
+
+  if (!args.contractId || !args.rpcUrl || !args.networkPassphrase || !secretKey) {
     logger.error?.(
-      'sanctions-oracle: Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, --secret-key (or pass --dry-run).',
+      'sanctions-oracle: Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, and SANCTIONS_ORACLE_SECRET_KEY (env, preferred) or --secret-key (or pass --dry-run).',
     );
     process.exitCode = 1;
     return;
@@ -675,7 +692,7 @@ export async function runCli(argv?: string[]): Promise<void> {
     rpcUrl: args.rpcUrl,
     networkPassphrase: args.networkPassphrase,
     contractId: args.contractId,
-    sourceKeypair: Keypair.fromSecret(args.secretKey),
+    sourceKeypair: Keypair.fromSecret(secretKey),
   });
 
   const result = await syncSanctionsToDenylist({
