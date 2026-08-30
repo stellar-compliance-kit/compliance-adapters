@@ -15,6 +15,7 @@ module.exports = {
   // compile it directly without requiring a separate build step.
   moduleNameMapper: {
     '^@compliance-adapters/logger$': '<rootDir>/../logger/src/index.ts',
+    '^@compliance-adapters/backoff$': '<rootDir>/../backoff/src/index.ts',
   },
   collectCoverageFrom: ['src/**/*.ts'],
   coverageReporters: ['text', 'lcov', 'json-summary'],

@@ -4,7 +4,7 @@
  */
 
 import { createHmac } from 'node:crypto';
-import { computeBackoffDelayMs } from './backoff';
+import { computeBackoffDelayMs } from '@compliance-adapters/backoff';
 import type { RawContractEvent } from './eventSource';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { type AnyTracer, NoopTracer, type TracingContext } from './tracing';
