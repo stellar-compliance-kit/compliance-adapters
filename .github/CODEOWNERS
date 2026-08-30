@@ -15,5 +15,8 @@
 # Horizon Listener adapter package
 /horizon-listener/ @Lynndabel
 
+# Shared logger package
+/logger/ @MooreTheAnalyst @akprinciple @Lynndabel
+
 # GitHub configuration
 /.github/ @MooreTheAnalyst @akprinciple @Lynndabel
