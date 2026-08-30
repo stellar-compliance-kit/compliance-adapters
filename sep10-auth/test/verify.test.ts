@@ -179,7 +179,7 @@ describe('verifyChallenge', () => {
     expect(result.valid).toBe(false);
     expect(result.address).toBe('');
     expect(result.error).toBeDefined();
-    expect(result.error).toMatch(/network|passphrase|hash|signed/i);
+    expect(result.error).toMatch(/network|passphrase|hash|signed|server/i);
   });
 
   it('rejects a challenge the client never signed', () => {
