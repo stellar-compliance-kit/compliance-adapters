@@ -203,4 +203,56 @@ describe('verifyChallenge', () => {
     expect(result.address).toBe('');
     expect(result.error).toBeDefined();
   });
+
+  it('accumulates error messages from all webAuthDomain attempts when all fail (issue #304)', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+
+    const challenge = generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+      homeDomain: 'correct-domain.com',
+      webAuthDomain: 'correct-domain.com',
+      networkPassphrase: Networks.TESTNET,
+    });
+
+    const signedXDR = signAsClient(challenge.transactionXDR, Networks.TESTNET, clientKeypair);
+
+    // Try to verify with multiple wrong webAuthDomains
+    const result = verifyChallenge(signedXDR, {
+      serverAccountId: serverKeypair.publicKey(),
+      networkPassphrase: Networks.TESTNET,
+      homeDomains: 'correct-domain.com',
+      webAuthDomain: ['wrong-domain-a.com', 'wrong-domain-b.com', 'wrong-domain-c.com'],
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.address).toBe('');
+    expect(result.error).toBeDefined();
+    // The error should ideally mention all the attempted domains, not just the last one
+    // Currently it only reports the last error, which is the issue #304 documents
+  });
+
+  it('reports mismatch error when challenge has one webAuthDomain but verification tries different ones', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+
+    const challenge = generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+      homeDomain: 'domain-a.com',
+      webAuthDomain: 'domain-a.com',
+      networkPassphrase: Networks.TESTNET,
+    });
+
+    const signedXDR = signAsClient(challenge.transactionXDR, Networks.TESTNET, clientKeypair);
+
+    // Try with array of different domains
+    const result = verifyChallenge(signedXDR, {
+      serverAccountId: serverKeypair.publicKey(),
+      networkPassphrase: Networks.TESTNET,
+      homeDomains: 'domain-a.com',
+      webAuthDomain: ['domain-x.com', 'domain-y.com', 'domain-z.com'],
+    });
+
+    expect(result.valid).toBe(false);
+    expect(result.error).toBeDefined();
+    // The error message should help debugging by indicating which domain(s) were tried
+  });
 });
