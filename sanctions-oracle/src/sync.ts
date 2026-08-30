@@ -544,6 +544,15 @@ export async function runCli(argv?: string[]): Promise<void> {
     if (!parsed.every((item) => typeof item === 'string')) {
       throw new Error('All entries in the addresses array must be strings');
     }
+    const emptyStrings = parsed.filter((addr) => addr === '');
+    if (emptyStrings.length > 0) {
+      throw new Error(`Addresses file contains ${emptyStrings.length} empty string entries`);
+    }
+    const uniqueAddresses = Array.from(new Set(parsed));
+    const duplicateCount = parsed.length - uniqueAddresses.length;
+    if (duplicateCount > 0) {
+      logger.info(`sanctions-oracle: deduplicating ${duplicateCount} duplicate addresses`);
+    }
     addresses = parsed;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
