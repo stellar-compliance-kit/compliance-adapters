@@ -175,7 +175,7 @@ describe('ProviderRegistry', () => {
   });
 
   describe('a provider that errors while others succeed', () => {
-    it('excludes the errored provider from the vote by default (onProviderError: "ignore")', async () => {
+    it('default onProviderError is fail-open ("ignore"): excludes errored provider from vote', async () => {
       const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
       registry.register('flaky', throwingProvider('timeout'));
       registry.register('clean', fakeProvider(false, 'list-a'));
@@ -185,6 +185,17 @@ describe('ProviderRegistry', () => {
       expect(detailed.flagged).toBe(false);
       expect(detailed.results).toEqual([{ name: 'clean', flagged: false, source: 'list-a' }]);
       expect(detailed.errors).toEqual([{ name: 'flaky', error: 'timeout' }]);
+    });
+
+    it('default policy permits single healthy provider to clear despite upstream failures', async () => {
+      const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
+      registry.register('watchlist-1', throwingProvider('unreachable'));
+      registry.register('watchlist-2', throwingProvider('unavailable'));
+      registry.register('watchlist-3', fakeProvider(false, 'sdn-list'));
+
+      const result = await registry.checkAddress(ADDRESS);
+
+      expect(result.flagged).toBe(false);
     });
 
     it('treats the errored provider as flagged when onProviderError: "flag"', async () => {
@@ -251,6 +262,42 @@ describe('ProviderRegistry', () => {
     });
   });
 
+  describe('unregister during checkAddressDetailed', () => {
+    it('in-flight check sees a consistent snapshot even if provider is unregistered mid-check', async () => {
+      let slowProviderReady: (() => void) | undefined;
+      const slowProviderStarted = new Promise<void>((resolve) => {
+        slowProviderReady = resolve;
+      });
+
+      const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
+
+      // Register a slow provider that we'll unregister mid-check
+      registry.register('slow', {
+        async checkAddress() {
+          slowProviderReady?.();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return { flagged: true, source: 'slow-list' };
+        },
+      });
+      registry.register('fast', fakeProvider(false, 'fast-list'));
+
+      // Start the check
+      const checkPromise = registry.checkAddressDetailed(ADDRESS);
+
+      // Wait for slow provider to start
+      await slowProviderStarted;
+
+      // Unregister the slow provider while check is in flight
+      registry.unregister('slow');
+
+      // The in-flight check should still see the slow provider
+      const result = await checkPromise;
+      expect(result.results).toHaveLength(2);
+      expect(result.results.find((r) => r.name === 'slow')).toBeDefined();
+      expect(result.flagged).toBe(true);
+    });
+  });
+
   describe('interop with syncSanctionsToDenylist', () => {
     it('accepts a ProviderRegistry in place of a single SanctionsProvider', async () => {
       const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
@@ -269,6 +316,125 @@ describe('ProviderRegistry', () => {
 
       expect(result.flagged).toEqual([ADDRESS]);
       expect(writer.addToDenylist).toHaveBeenCalledWith(ADDRESS);
+    });
+  });
+
+  describe('migration patterns (issue #325)', () => {
+    it('allows migration from single provider to ProviderRegistry', async () => {
+      // Before: operators with a single provider
+      const singleProvider = fakeProvider(true, 'custom-list');
+
+      // After: same provider registered in a registry
+      const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
+      registry.register('custom-provider', singleProvider);
+
+      // Both should produce the same result
+      const singleResult = await singleProvider.checkAddress(ADDRESS);
+      const registryResult = await registry.checkAddress(ADDRESS);
+
+      expect(singleResult).toEqual(registryResult);
+    });
+
+    it('allows wrapping an existing provider in RateLimitedSanctionsProvider', async () => {
+      // Import as if from the sanctions-oracle package
+      const RateLimitedSanctionsProvider =
+        require('../src/rateLimitedProvider').RateLimitedSanctionsProvider;
+
+      const baseProvider = fakeProvider(false, 'custom-list');
+      const rateLimited = new RateLimitedSanctionsProvider(baseProvider);
+
+      const result = await rateLimited.checkAddress(ADDRESS);
+      expect(result.flagged).toBe(false);
+      expect(result.source).toBe('custom-list');
+    });
+
+    it('supports wrapping a provider then registering in ProviderRegistry', async () => {
+      const RateLimitedSanctionsProvider =
+        require('../src/rateLimitedProvider').RateLimitedSanctionsProvider;
+
+      // Migration path: wrap existing provider for rate-limit resilience
+      const baseProvider = fakeProvider(true, 'internal-list');
+      const rateLimited = new RateLimitedSanctionsProvider(baseProvider);
+
+      // Then register in a registry to support multiple providers
+      const registry = new ProviderRegistry({ policy: 'priority-override' });
+      registry.register('primary-provider', rateLimited, { priority: 0 });
+      registry.register('backup-provider', fakeProvider(false, 'backup-list'), { priority: 1 });
+
+      const detailed = await registry.checkAddressDetailed(ADDRESS);
+      expect(detailed.flagged).toBe(true);
+      expect(detailed.source).toBe('primary-provider:internal-list');
+    });
+
+    it('allows gradual migration by adding providers to existing registry one at a time', async () => {
+      const registry = new ProviderRegistry({ policy: 'majority-vote' });
+
+      // Start with one provider
+      registry.register('provider-a', fakeProvider(false, 'list-a'));
+      let result = await registry.checkAddress(ADDRESS);
+      expect(result.flagged).toBe(false);
+
+      // Add second provider
+      registry.register('provider-b', fakeProvider(false, 'list-b'));
+      result = await registry.checkAddress(ADDRESS);
+      expect(result.flagged).toBe(false);
+
+      // Add third provider
+      registry.register('provider-c', fakeProvider(true, 'list-c'));
+      result = await registry.checkAddress(ADDRESS);
+      // Majority vote: 2 clear, 1 flagged = not flagged
+      expect(result.flagged).toBe(false);
+    });
+
+    it('supports switching aggregation policies during migration', async () => {
+      const provider1 = fakeProvider(true, 'list-a');
+      const provider2 = fakeProvider(false, 'list-b');
+
+      // Start with any-flag-wins policy
+      const anyFlagRegistry = new ProviderRegistry({ policy: 'any-flag-wins' });
+      anyFlagRegistry.register('a', provider1);
+      anyFlagRegistry.register('b', provider2);
+
+      const anyFlagResult = await anyFlagRegistry.checkAddress(ADDRESS);
+      expect(anyFlagResult.flagged).toBe(true); // any-flag-wins: 1 flag → flag
+
+      // Later migrate to majority-vote policy
+      const majorityRegistry = new ProviderRegistry({ policy: 'majority-vote' });
+      majorityRegistry.register('a', provider1);
+      majorityRegistry.register('b', provider2);
+
+      const majorityResult = await majorityRegistry.checkAddress(ADDRESS);
+      expect(majorityResult.flagged).toBe(false); // majority-vote: 1 flag, 1 clear → clear
+    });
+
+    it('supports priority-override policy for gradual trust migration', async () => {
+      // Common pattern: migrate from old provider (high priority) to new provider (lower priority)
+      const registry = new ProviderRegistry({ policy: 'priority-override' });
+
+      // During migration: old provider takes priority
+      const oldProvider = fakeProvider(false, 'old-list');
+      registry.register('old-provider', oldProvider, { priority: 0 });
+
+      // New provider registered at lower priority
+      const newProvider = fakeProvider(true, 'new-list');
+      registry.register('new-provider', newProvider, { priority: 1 });
+
+      const result = await registry.checkAddressDetailed(ADDRESS);
+      // Old provider (priority 0) wins
+      expect(result.source).toBe('old-provider:old-list');
+      expect(result.flagged).toBe(false);
+
+      // After migration is confident, swap priorities
+      registry.unregister('old-provider');
+      registry.unregister('new-provider');
+
+      registry.register('old-provider', oldProvider, { priority: 1 });
+      registry.register('new-provider', newProvider, { priority: 0 });
+
+      const migratedResult = await registry.checkAddressDetailed(ADDRESS);
+      // New provider (now priority 0) wins
+      expect(migratedResult.source).toBe('new-provider:new-list');
+      expect(migratedResult.flagged).toBe(true);
     });
   });
 });

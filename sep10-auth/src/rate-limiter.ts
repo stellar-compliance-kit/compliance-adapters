@@ -57,23 +57,31 @@ export function rateLimiter(options: RateLimiterOptions = {}): RequestHandler {
   const store = new Map<string, RateLimitEntry>();
 
   // Periodic sweep — every windowMs we discard stale entries so the store
-  // doesn't grow unbounded under heavy traffic.
-  const sweepTimer = setInterval(() => {
-    const now = Date.now();
-    for (const [key, entry] of store) {
-      entry.timestamps = entry.timestamps.filter((t) => now - t < windowMs);
-      if (entry.timestamps.length === 0) {
-        store.delete(key);
-      }
-    }
-  }, windowMs);
+  // doesn't grow unbounded under heavy traffic. Started lazily on the first
+  // request so a middleware instance that never receives traffic never
+  // schedules a timer.
+  let sweepTimer: ReturnType<typeof setInterval> | undefined;
 
-  // Allow the timer to keep the process alive (like a keepAlive timer).
-  if (sweepTimer.unref) {
-    sweepTimer.unref();
+  function ensureSweepTimer(): void {
+    if (sweepTimer) return;
+    sweepTimer = setInterval(() => {
+      const now = Date.now();
+      for (const [key, entry] of store) {
+        entry.timestamps = entry.timestamps.filter((t) => now - t < windowMs);
+        if (entry.timestamps.length === 0) {
+          store.delete(key);
+        }
+      }
+    }, windowMs);
+
+    // Allow the timer to keep the process alive (like a keepAlive timer).
+    if (sweepTimer.unref) {
+      sweepTimer.unref();
+    }
   }
 
   return (req, res, next) => {
+    ensureSweepTimer();
     const key = keyFn(req);
     const now = Date.now();
 

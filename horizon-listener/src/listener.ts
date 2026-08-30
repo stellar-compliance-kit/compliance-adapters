@@ -253,4 +253,22 @@ export class HorizonListener {
     this.running = false;
     this.sleepAbortController?.abort();
   }
+
+  /**
+   * Returns a snapshot of the listener's current health/progress state, for
+   * use in liveness/readiness probes or status dashboards.
+   */
+  getStatus(): {
+    running: boolean;
+    cursor: string | undefined;
+    consecutiveFailures: number;
+    backfilling: boolean;
+  } {
+    return {
+      running: this.running,
+      cursor: this.cursor,
+      consecutiveFailures: this.attempt,
+      backfilling: this.backfilling,
+    };
+  }
 }

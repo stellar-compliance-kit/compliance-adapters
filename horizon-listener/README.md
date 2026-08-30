@@ -11,6 +11,12 @@ backed off before retrying, not a literal TCP reconnect. This package
 demonstrates the integration pattern app developers would build on top of;
 it is not itself a production event pipeline.
 
+## Runtime compatibility
+
+This package requires **Node.js 20 or newer** because its HTTP webhook sender
+uses the native `fetch` API provided by Node 20. Older Node.js versions do not
+provide the required runtime fetch support and are not supported.
+
 ## Install
 
 ```sh

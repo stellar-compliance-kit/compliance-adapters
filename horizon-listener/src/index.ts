@@ -17,10 +17,10 @@ export {
   MetricsRegistry,
   NoopMetricsRegistry,
   DEFAULT_HISTOGRAM_BUCKETS,
+  type Phase,
   type AnyMetricsRegistry,
   type Counter,
   type Histogram,
-  type Phase,
   type Outcome,
   type MetricsRegistryOptions,
 } from './metrics';
