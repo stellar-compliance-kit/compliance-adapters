@@ -41,13 +41,17 @@ interface CacheEntry {
 export class ProviderResultCache {
   private cache: Map<string, CacheEntry> = new Map();
   private readonly ttlMs: number;
+  private readonly maxEntries?: number;
 
   /**
    * Create a result cache with a specified time-to-live (TTL).
    * @param ttlMs Time-to-live for cached results in milliseconds
+   * @param maxEntries Optional maximum number of entries to retain. When set,
+   * the least-recently-used entry is evicted once the cache would exceed this size.
    */
-  constructor(ttlMs: number = 3600000) {
+  constructor(ttlMs: number = 3600000, maxEntries?: number) {
     this.ttlMs = ttlMs;
+    this.maxEntries = maxEntries;
   }
 
   /**
@@ -64,6 +68,10 @@ export class ProviderResultCache {
       return undefined;
     }
 
+    // Refresh recency for LRU eviction.
+    this.cache.delete(address);
+    this.cache.set(address, entry);
+
     return entry.result;
   }
 
@@ -71,10 +79,27 @@ export class ProviderResultCache {
    * Store a result in the cache.
    */
   set(address: string, result: { flagged: boolean; source: string }): void {
+    this.cache.delete(address);
     this.cache.set(address, {
       result,
       timestamp: Date.now(),
     });
+
+    if (this.maxEntries !== undefined) {
+      while (this.cache.size > this.maxEntries) {
+        const oldestKey = this.cache.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.cache.delete(oldestKey);
+      }
+    }
+  }
+
+  /**
+   * Remove a single cached entry, e.g. after an operator determines it's stale.
+   * @returns Whether an entry was present and removed.
+   */
+  delete(address: string): boolean {
+    return this.cache.delete(address);
   }
 
   /**

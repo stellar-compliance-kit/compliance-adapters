@@ -26,8 +26,21 @@ export interface RevocationStore {
  * are held in a `Map` and are lost on process restart; suitable for a single
  * process or as a template for a persistent (e.g. Redis, database-backed) store.
  */
+export interface InMemoryRevocationStoreOptions {
+  /**
+   * Maximum number of revocations to retain. When set and a new revocation
+   * would exceed it, the oldest-revoked entry is evicted first.
+   */
+  maxEntries?: number;
+}
+
 export class InMemoryRevocationStore implements RevocationStore {
   private readonly revoked = new Map<string, Date | undefined>();
+  private readonly maxEntries?: number;
+
+  constructor(options: InMemoryRevocationStoreOptions = {}) {
+    this.maxEntries = options.maxEntries;
+  }
 
   isRevoked(address: string): boolean {
     const until = this.revoked.get(address);
@@ -42,10 +55,24 @@ export class InMemoryRevocationStore implements RevocationStore {
   }
 
   revoke(address: string, until?: Date): void {
+    this.revoked.delete(address);
     this.revoked.set(address, until);
+
+    if (this.maxEntries !== undefined) {
+      while (this.revoked.size > this.maxEntries) {
+        const oldestKey = this.revoked.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.revoked.delete(oldestKey);
+      }
+    }
   }
 
   unrevoke(address: string): void {
     this.revoked.delete(address);
+  }
+
+  /** Current number of tracked revocations (including any not yet lazily expired). */
+  size(): number {
+    return this.revoked.size;
   }
 }
