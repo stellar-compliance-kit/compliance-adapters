@@ -3,10 +3,14 @@
   "private": true,
   "version": "0.1.0",
   "description": "Integration adapters connecting Stellar compliance primitives to SEP-10 auth, sanctions oracles, and Horizon event streams.",
+  "bin": {
+    "compliance-adapters": "bin/compliance-adapters.js"
+  },
   "workspaces": [
     "sep10-auth",
     "sanctions-oracle",
-    "horizon-listener"
+    "horizon-listener",
+    "examples/full-stack-demo"
   ],
   "engines": {
     "node": ">=20.0.0"
