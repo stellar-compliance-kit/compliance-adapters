@@ -113,8 +113,8 @@ export class HttpWebhookSender implements WebhookSender {
     span.setAttribute('event.id', event.id);
 
     // Inject traceparent into outbound request headers for downstream correlation
-    const traceparent =
-      span.traceId ? this.tracer.injectContext({ traceId: span.traceId, spanId: span.spanId })
+    const traceparent = span.traceId
+      ? this.tracer.injectContext({ traceId: span.traceId, spanId: span.spanId })
       : undefined;
     if (traceparent) {
       headers['traceparent'] = traceparent;
@@ -148,8 +148,6 @@ export class HttpWebhookSender implements WebhookSender {
           const durationMs = Date.now() - start;
 
           if (!response.ok) {
-            this.metrics.counter.inc('webhook', 'failure');
-            this.metrics.histogram.observe('webhook', durationMs);
             throw new WebhookHttpError(
               `horizon-listener: webhook POST to ${this.url} failed with status ${response.status}`,
               response.status,
@@ -168,11 +166,9 @@ export class HttpWebhookSender implements WebhookSender {
         }
       } catch (error) {
         const httpError = error instanceof WebhookHttpError ? error : undefined;
-        if (!httpError) {
-          const durationMs = Date.now() - start;
-          this.metrics.counter.inc('webhook', 'failure');
-          this.metrics.histogram.observe('webhook', durationMs);
-        }
+        const durationMs = Date.now() - start;
+        this.metrics.counter.inc('webhook', 'failure');
+        this.metrics.histogram.observe('webhook', durationMs);
         lastError = error instanceof Error ? error : new Error(String(error));
 
         // 4xx responses are permanent client errors (bad config, auth, etc.)
@@ -190,8 +186,6 @@ export class HttpWebhookSender implements WebhookSender {
   }
 
   private sign(timestamp: string, body: string): string {
-    return createHmac('sha256', this.signingSecret!)
-      .update(`${timestamp}.${body}`)
-      .digest('hex');
+    return createHmac('sha256', this.signingSecret!).update(`${timestamp}.${body}`).digest('hex');
   }
 }

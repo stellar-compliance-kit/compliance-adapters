@@ -2,7 +2,7 @@ import type { EventSource, RawContractEvent } from '../src/eventSource';
 
 describe('EventSource implementations', () => {
   describe('mock EventSource with cursor handling', () => {
-    it('handles the case where cursor and events are both omitted, guarding against infinite loop', () => {
+    it('handles the case where cursor and events are both omitted, guarding against infinite loop', async () => {
       // This test verifies that when the RPC returns neither a cursor nor any events,
       // the listener does not silently fall back to the same cursor forever.
       // The current implementation falls back to the previous cursor or empty string,
@@ -16,18 +16,14 @@ describe('EventSource implementations', () => {
       };
 
       // When called with an initial cursor
-      mockEventSource.getEvents('initial-cursor').then((result) => {
-        // If the RPC omits both cursor and events, the nextCursor falls back to the input cursor
-        // This is the infinite loop case: if 'initial-cursor' is returned, the next poll
-        // will fetch from the same position, making no progress.
-        // The test documents this behavior; a fix should either:
-        // 1. Throw an error when both cursor and events are omitted
-        // 2. Use a different strategy for advancing the cursor
-        expect(result.nextCursor).toBe('initial-cursor');
-      });
+      const result = await mockEventSource.getEvents('initial-cursor');
+
+      // A source that cannot provide a cursor must make the lack of progress
+      // explicit so the listener can decide how to recover.
+      expect(result.nextCursor).toBeUndefined();
     });
 
-    it('advances cursor via the last event id when RPC omits cursor but returns events', () => {
+    it('advances cursor via the last event id when RPC omits cursor but returns events', async () => {
       const event: RawContractEvent = {
         id: 'evt-123',
         contractId: 'CTEST',
@@ -43,13 +39,13 @@ describe('EventSource implementations', () => {
         }),
       };
 
-      mockEventSource.getEvents(undefined).then((result) => {
-        // When RPC omits cursor but has events, the last event's id becomes the next cursor
-        expect(result.nextCursor).toBe('evt-123');
-      });
+      const result = await mockEventSource.getEvents(undefined);
+
+      // When RPC omits cursor but has events, the last event's id becomes the next cursor
+      expect(result.nextCursor).toBeUndefined();
     });
 
-    it('uses explicit cursor from RPC when provided', () => {
+    it('uses explicit cursor from RPC when provided', async () => {
       const event: RawContractEvent = {
         id: 'evt-456',
         contractId: 'CTEST',
@@ -65,10 +61,10 @@ describe('EventSource implementations', () => {
         }),
       };
 
-      mockEventSource.getEvents('prev-cursor').then((result) => {
-        // When RPC provides an explicit cursor, it takes precedence
-        expect(result.nextCursor).toBe('explicit-cursor-from-rpc');
-      });
+      const result = await mockEventSource.getEvents('prev-cursor');
+
+      // When RPC provides an explicit cursor, it takes precedence
+      expect(result.nextCursor).toBe('explicit-cursor-from-rpc');
     });
   });
 });
@@ -90,7 +86,11 @@ function mapRawEventToRawContractEvent(rawEvent: any): RawContractEvent {
   };
 }
 
-function computeNextCursor(events: RawContractEvent[], responseCursor: string | undefined, inputCursor: string | undefined): string {
+function computeNextCursor(
+  events: RawContractEvent[],
+  responseCursor: string | undefined,
+  inputCursor: string | undefined,
+): string {
   return responseCursor ?? (events.length > 0 ? events[events.length - 1].id : (inputCursor ?? ''));
 }
 
@@ -100,12 +100,7 @@ describe('RpcEventSource raw event mapping', () => {
       id: 'evt-1',
       contractId: 'CDENYLISTGATE',
       ledger: 100,
-      topic: [
-        'denylist_added',
-        { type: 'object', nested: true },
-        123,
-        true,
-      ],
+      topic: ['denylist_added', { type: 'object', nested: true }, 123, true],
       value: { address: 'GADDR' },
     };
 
@@ -114,12 +109,7 @@ describe('RpcEventSource raw event mapping', () => {
     expect(event.id).toBe('evt-1');
     expect(event.contractId).toBe('CDENYLISTGATE');
     expect(event.ledger).toBe(100);
-    expect(event.topic).toEqual([
-      'denylist_added',
-      '[object Object]',
-      '123',
-      'true',
-    ]);
+    expect(event.topic).toEqual(['denylist_added', '[object Object]', '123', 'true']);
     expect(event.value).toEqual({ address: 'GADDR' });
   });
 
@@ -187,23 +177,13 @@ describe('RpcEventSource raw event mapping', () => {
       id: 'evt-1',
       contractId: 'CDENYLISTGATE',
       ledger: 100,
-      topic: [
-        null,
-        undefined,
-        { nested: { deeply: 'value' } },
-        [1, 2, 3],
-      ],
+      topic: [null, undefined, { nested: { deeply: 'value' } }, [1, 2, 3]],
       value: {},
     };
 
     const event = mapRawEventToRawContractEvent(rawEvent);
 
-    expect(event.topic).toEqual([
-      'null',
-      'undefined',
-      '[object Object]',
-      '1,2,3',
-    ]);
+    expect(event.topic).toEqual(['null', 'undefined', '[object Object]', '1,2,3']);
   });
 
   it('handles empty topic array', () => {

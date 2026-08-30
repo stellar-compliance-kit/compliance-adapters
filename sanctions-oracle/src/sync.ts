@@ -12,7 +12,16 @@ import {
   nativeToScVal,
   rpc,
 } from '@stellar/stellar-sdk';
-import { type Logger, noopLogger, consoleLogger } from '@compliance-adapters/logger';
+import {
+  type Logger as StructuredLogger,
+  noopLogger,
+  consoleLogger,
+} from '@compliance-adapters/logger';
+
+export type Logger = Partial<StructuredLogger> & {
+  /** Legacy progress-log method retained for older integrations. */
+  log?: (...args: unknown[]) => void;
+};
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
@@ -128,6 +137,10 @@ export interface SyncOptions {
    */
   concurrency?: number;
   /**
+   * Existing denylist entries that should not be written again.
+   */
+  currentDenylist?: string[];
+  /**
    * Optional metrics registry.  Pass a `MetricsRegistry` instance to record
    * per-phase counters and latency histograms for `address_check` and
    * `denylist_write` operations.  When omitted all instrumentation is a no-op.
@@ -206,11 +219,12 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     cache,
     progressInterval = 100,
     concurrency,
+    currentDenylist = [],
     metrics = new NoopMetricsRegistry(),
     tracer = new NoopTracer(),
   } = options;
 
-  logger.info('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
+  logger.info?.('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
 
   const uniqueAddresses = Array.from(new Set(addresses));
   const flagged: string[] = [];
@@ -249,7 +263,8 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
       } finally {
         checked += 1;
         if (checked % progressInterval === 0) {
-          logger.debug(
+          options.logger?.log?.(`Progress: ${checked}/${uniqueAddresses.length} addresses checked`);
+          logger.debug?.(
             `sanctions-oracle: progress ${checked}/${uniqueAddresses.length} addresses checked`,
           );
         }
@@ -258,7 +273,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     concurrency,
   );
 
-  logger.info('sanctions-oracle: screening complete', {
+  logger.info?.('sanctions-oracle: screening complete', {
     checked: addresses.length,
     flagged: flagged.length,
   });
@@ -266,10 +281,14 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   const written: string[] = [];
   if (dryRun) {
     for (const { address } of flaggedWithSource) {
-      logger.info('sanctions-oracle: [dry-run] would call add_to_denylist', { address });
+      logger.info?.('sanctions-oracle: [dry-run] would call add_to_denylist', { address });
     }
   } else {
+    const currentDenylistSet = new Set(currentDenylist);
     for (const { address, source } of flaggedWithSource) {
+      if (currentDenylistSet.has(address)) {
+        continue;
+      }
       const start = Date.now();
       const span = tracer.startSpan('denylist_write');
       try {
@@ -293,7 +312,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         span.setAttribute('denylist_write.tx_hash', result.hash);
         span.end('ok');
         written.push(address);
-        logger.info('sanctions-oracle: address written to denylist', {
+        logger.info?.('sanctions-oracle: address written to denylist', {
           address,
           hash: result.hash,
         });
@@ -339,7 +358,7 @@ interface RpcDenylistWriterOptions {
    * Optional logger used to record an audit-logging failure without failing
    * the write it accompanies. Defaults to a no-op logger.
    */
-  logger?: Logger;
+  logger?: StructuredLogger;
 }
 
 // Kept behind the DenylistWriter interface (rather than called directly
@@ -429,7 +448,7 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
           // The on-chain write above already succeeded — an audit-logging
           // failure must not fail this address's write or propagate up
           // through syncSanctionsToDenylist's write loop.
-          logger.error('sanctions-oracle: audit logger failed after successful denylist write', {
+          logger.error?.('sanctions-oracle: audit logger failed after successful denylist write', {
             address,
             txHash: hash,
             error: error instanceof Error ? error.message : String(error),
@@ -530,7 +549,7 @@ export async function runCli(argv?: string[]): Promise<void> {
   }
 
   if (!args.addressesPath) {
-    logger.error('sanctions-oracle: Missing required flag: --addresses <path-to-json-array>');
+    logger.error?.('sanctions-oracle: Missing required flag: --addresses <path-to-json-array>');
     process.exitCode = 1;
     return;
   }
@@ -567,13 +586,13 @@ export async function runCli(argv?: string[]): Promise<void> {
       dryRun: true,
       logger,
     });
-    logger.info('sanctions-oracle: dry-run result', result);
+    logger.info?.('sanctions-oracle: dry-run result', result);
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
   if (!args.contractId || !args.rpcUrl || !args.networkPassphrase || !args.secretKey) {
-    logger.error(
+    logger.error?.(
       'sanctions-oracle: Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, --secret-key (or pass --dry-run).',
     );
     process.exitCode = 1;
