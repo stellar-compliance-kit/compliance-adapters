@@ -24,6 +24,8 @@ export type Logger = Partial<StructuredLogger> & {
 };
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
+import { CsvSanctionsProvider } from './csvProvider';
+import { RateLimitedSanctionsProvider } from './rateLimitedProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { withRetry, RetryOptions } from './retry';
@@ -494,6 +496,12 @@ export interface CliArgs {
   networkPassphrase?: string;
   secretKey?: string;
   help?: boolean;
+  /** Path to a CSV file of flagged addresses, used to build a CsvSanctionsProvider. */
+  csvPath?: string;
+  /** Path to a module exporting a SanctionsProvider-compatible default export. */
+  providerModulePath?: string;
+  /** Wrap the selected provider with RateLimitedSanctionsProvider's backoff/concurrency protection. */
+  rateLimit?: boolean;
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -519,6 +527,15 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--secret-key':
         args.secretKey = argv[++i];
         break;
+      case '--csv':
+        args.csvPath = argv[++i];
+        break;
+      case '--provider-module':
+        args.providerModulePath = argv[++i];
+        break;
+      case '--rate-limit':
+        args.rateLimit = true;
+        break;
       case '--help':
       case '-h':
         args.help = true;
@@ -543,6 +560,10 @@ OPTIONS:
   --rpc-url <url>             Soroban RPC endpoint URL (required for live sync)
   --network-passphrase <str>  Network passphrase (required for live sync)
   --secret-key <key>          Source account secret key (required for live sync)
+  --csv <path>                Use a CsvSanctionsProvider backed by the given CSV file
+  --provider-module <path>    Dynamically import a module whose default export is a
+                               SanctionsProvider to use instead of the mock/CSV provider
+  --rate-limit                Wrap the selected provider with RateLimitedSanctionsProvider
   --dry-run                   Preview output without writing to the contract
   --help, -h                  Show this help message
 
@@ -595,9 +616,26 @@ export async function runCli(argv?: string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  // CLI ships only the reference mock provider; wiring a real provider is
-  // left to consumers embedding syncSanctionsToDenylist programmatically.
-  const provider = new MockSanctionsProvider();
+  let provider: SanctionsProvider;
+  if (args.providerModulePath) {
+    try {
+      const imported = await import(args.providerModulePath);
+      provider = (imported.default ?? imported) as SanctionsProvider;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to load provider module ${args.providerModulePath}: ${message}`);
+      process.exitCode = 1;
+      return;
+    }
+  } else if (args.csvPath) {
+    provider = new CsvSanctionsProvider(args.csvPath);
+  } else {
+    provider = new MockSanctionsProvider();
+  }
+
+  if (args.rateLimit) {
+    provider = new RateLimitedSanctionsProvider(provider);
+  }
 
   if (args.dryRun) {
     const result = await syncSanctionsToDenylist({
