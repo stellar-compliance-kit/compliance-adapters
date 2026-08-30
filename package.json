@@ -8,6 +8,9 @@
   },
   "workspaces": [
     "logger",
+    "backoff",
+    "tracing",
+    "metrics",
     "sep10-auth",
     "sanctions-oracle",
     "horizon-listener",
@@ -29,15 +32,16 @@
     "test:e2e:test-only": "npm run test --workspace=e2e-tests",
     "test:e2e": "npm run test:e2e:start && npm run test:e2e:test-only ; npm run test:e2e:stop",
     "test:e2e:ci": "npm run test:e2e:start && npm run test:e2e:test-only ; docker-compose -f e2e-tests/docker-compose.yml down -v || true",
-    "lint": "eslint sep10-auth/src sanctions-oracle/src horizon-listener/src logger/src bin scripts examples --ext .ts,.js",
+    "lint": "eslint sep10-auth/src sanctions-oracle/src horizon-listener/src logger/src backoff/src tracing/src metrics/src bin scripts examples --ext .ts,.js",
     "check:license": "node scripts/check-license-headers.js",
+    "check:changelog": "node scripts/check-root-changelog.js",
     "format": "prettier --check .",
     "format:check": "prettier --check .",
     "format:write": "prettier --write .",
     "changeset": "changeset",
     "version": "changeset version",
     "changelog": "changeset status",
-    "release": "changeset publish",
+    "release": "npm run check:changelog && changeset publish",
     "apply-package-labels": "node ./scripts/apply-package-labels.js"
   },
   "devDependencies": {
