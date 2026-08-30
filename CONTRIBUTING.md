@@ -94,6 +94,24 @@ address be blocked, and does the chain know that yet?", and `horizon-listener` a
 changed on-chain?". If a change doesn't fit any of the three questions above, it likely warrants a
 new package rather than being bolted onto an existing one — open an issue to discuss first.
 
+## When to extract a shared package
+
+When you find yourself duplicating utility code across packages (retry logic, metrics, logging,
+backoff strategies), extract it into a new shared package under the monorepo root rather than
+repeating the code.
+
+**Decision criteria:**
+
+- **Already extracted example**: The `@compliance-adapters/logger` package demonstrates the
+  established pattern. When a utility is needed across package boundaries, it's extracted to its
+  own workspace with its own `package.json`, tests, and documentation. Follow this pattern.
+- **If used by just one package**: Keep it inside that package (e.g., a provider-specific utility
+  in `sanctions-oracle`).
+- **If used by two or more packages**: Extract to a new workspace. Examples of things that should
+  not be duplicated: metrics/tracing instrumentation, backoff/retry logic, common error types.
+- **Document the boundary**: Update this section of CONTRIBUTING.md if you create a new shared
+  package, including its purpose and which packages depend on it.
+
 ## Code style
 
 - TypeScript, Node 20+. Formatting is enforced by Prettier/ESLint (`npm run lint`).
