@@ -24,5 +24,7 @@ module.exports = {
   // compile it directly without requiring a separate build step.
   moduleNameMapper: {
     '^@compliance-adapters/logger$': '<rootDir>/../logger/src/index.ts',
+    '^@compliance-adapters/tracing$': '<rootDir>/../tracing/src/index.ts',
+    '^@compliance-adapters/metrics$': '<rootDir>/../metrics/src/index.ts',
   },
 };
