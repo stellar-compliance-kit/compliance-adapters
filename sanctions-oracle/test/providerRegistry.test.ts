@@ -175,7 +175,7 @@ describe('ProviderRegistry', () => {
   });
 
   describe('a provider that errors while others succeed', () => {
-    it('excludes the errored provider from the vote by default (onProviderError: "ignore")', async () => {
+    it('default onProviderError is fail-open ("ignore"): excludes errored provider from vote', async () => {
       const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
       registry.register('flaky', throwingProvider('timeout'));
       registry.register('clean', fakeProvider(false, 'list-a'));
@@ -185,6 +185,17 @@ describe('ProviderRegistry', () => {
       expect(detailed.flagged).toBe(false);
       expect(detailed.results).toEqual([{ name: 'clean', flagged: false, source: 'list-a' }]);
       expect(detailed.errors).toEqual([{ name: 'flaky', error: 'timeout' }]);
+    });
+
+    it('default policy permits single healthy provider to clear despite upstream failures', async () => {
+      const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
+      registry.register('watchlist-1', throwingProvider('unreachable'));
+      registry.register('watchlist-2', throwingProvider('unavailable'));
+      registry.register('watchlist-3', fakeProvider(false, 'sdn-list'));
+
+      const result = await registry.checkAddress(ADDRESS);
+
+      expect(result.flagged).toBe(false);
     });
 
     it('treats the errored provider as flagged when onProviderError: "flag"', async () => {
@@ -248,6 +259,42 @@ describe('ProviderRegistry', () => {
     it('throws if checkAddress is called with no registered providers', async () => {
       const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
       await expect(registry.checkAddress(ADDRESS)).rejects.toThrow(/no registered providers/);
+    });
+  });
+
+  describe('unregister during checkAddressDetailed', () => {
+    it('in-flight check sees a consistent snapshot even if provider is unregistered mid-check', async () => {
+      let slowProviderReady: (() => void) | undefined;
+      const slowProviderStarted = new Promise<void>((resolve) => {
+        slowProviderReady = resolve;
+      });
+
+      const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
+
+      // Register a slow provider that we'll unregister mid-check
+      registry.register('slow', {
+        async checkAddress() {
+          slowProviderReady?.();
+          await new Promise((resolve) => setTimeout(resolve, 100));
+          return { flagged: true, source: 'slow-list' };
+        },
+      });
+      registry.register('fast', fakeProvider(false, 'fast-list'));
+
+      // Start the check
+      const checkPromise = registry.checkAddressDetailed(ADDRESS);
+
+      // Wait for slow provider to start
+      await slowProviderStarted;
+
+      // Unregister the slow provider while check is in flight
+      registry.unregister('slow');
+
+      // The in-flight check should still see the slow provider
+      const result = await checkPromise;
+      expect(result.results).toHaveLength(2);
+      expect(result.results.find((r) => r.name === 'slow')).toBeDefined();
+      expect(result.flagged).toBe(true);
     });
   });
 
