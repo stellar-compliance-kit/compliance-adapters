@@ -1,4 +1,5 @@
 import type { EventSource, RawContractEvent } from '../src/eventSource';
+import { RpcEventSource } from '../src/eventSource';
 
 describe('EventSource implementations', () => {
   describe('mock EventSource with cursor handling', () => {
@@ -198,5 +199,150 @@ describe('RpcEventSource raw event mapping', () => {
     const event = mapRawEventToRawContractEvent(rawEvent);
 
     expect(event.topic).toEqual([]);
+  });
+});
+
+describe('RpcEventSource', () => {
+  it('respects configurable timeoutMs when provided', async () => {
+    jest.useFakeTimers();
+    try {
+      const mockServer = {
+        getEvents: jest.fn(() => {
+          return new Promise((resolve) => {
+            setTimeout(() => resolve({ events: [], cursor: 'test-cursor' }), 5000);
+          });
+        }),
+      };
+
+      const source = new RpcEventSource({
+        rpcUrl: 'http://localhost:8000',
+        networkPassphrase: 'Test SDF Network ; September 2015',
+        contractIds: ['CTEST'],
+        timeoutMs: 1000,
+      });
+
+      source['server'] = mockServer as any;
+
+      const promise = source.getEvents(undefined);
+
+      jest.advanceTimersByTime(1000);
+
+      await expect(promise).rejects.toThrow('timeout');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('allows requests to complete when they finish before timeout', async () => {
+    jest.useFakeTimers();
+    try {
+      const mockResponse = {
+        events: [
+          {
+            id: 'evt-1',
+            contractId: 'CTEST',
+            ledger: 100,
+            topic: ['test'],
+            value: {},
+          },
+        ],
+        cursor: 'next-cursor',
+      };
+
+      const mockServer = {
+        getEvents: jest.fn(() => Promise.resolve(mockResponse)),
+      };
+
+      const source = new RpcEventSource({
+        rpcUrl: 'http://localhost:8000',
+        networkPassphrase: 'Test SDF Network ; September 2015',
+        contractIds: ['CTEST'],
+        timeoutMs: 5000,
+      });
+
+      source['server'] = mockServer as any;
+
+      const result = await source.getEvents(undefined);
+
+      expect(result.events).toHaveLength(1);
+      expect(result.nextCursor).toBe('next-cursor');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('works without timeout when timeoutMs is not provided', async () => {
+    const mockResponse = {
+      events: [],
+      cursor: 'test-cursor',
+    };
+
+    const mockServer = {
+      getEvents: jest.fn(() => Promise.resolve(mockResponse)),
+    };
+
+    const source = new RpcEventSource({
+      rpcUrl: 'http://localhost:8000',
+      networkPassphrase: 'Test SDF Network ; September 2015',
+      contractIds: ['CTEST'],
+    });
+
+    source['server'] = mockServer as any;
+
+    const result = await source.getEvents(undefined);
+
+    expect(result.nextCursor).toBe('test-cursor');
+    expect(mockServer.getEvents).toHaveBeenCalled();
+  });
+
+  it('does not return empty cursor when response has no events and no cursor (issue #302)', async () => {
+    const mockResponse = {
+      events: [],
+      // RPC returns no cursor
+    };
+
+    const mockServer = {
+      getEvents: jest.fn(() => Promise.resolve(mockResponse)),
+    };
+
+    const source = new RpcEventSource({
+      rpcUrl: 'http://localhost:8000',
+      networkPassphrase: 'Test SDF Network ; September 2015',
+      contractIds: ['CTEST'],
+    });
+
+    source['server'] = mockServer as any;
+
+    // When calling with a specific cursor that we know we came from
+    const result = await source.getEvents('known-cursor-123');
+
+    // The nextCursor should preserve the input cursor, not fall back to empty string
+    // This prevents an infinite loop where the same cursor is used repeatedly
+    expect(result.nextCursor).toBe('known-cursor-123');
+  });
+
+  it('returns empty string only when both cursor and input cursor are missing', async () => {
+    const mockResponse = {
+      events: [],
+      // RPC returns no cursor
+    };
+
+    const mockServer = {
+      getEvents: jest.fn(() => Promise.resolve(mockResponse)),
+    };
+
+    const source = new RpcEventSource({
+      rpcUrl: 'http://localhost:8000',
+      networkPassphrase: 'Test SDF Network ; September 2015',
+      contractIds: ['CTEST'],
+    });
+
+    source['server'] = mockServer as any;
+
+    // When calling without an input cursor
+    const result = await source.getEvents(undefined);
+
+    // Should fall back to empty string as last resort
+    expect(result.nextCursor).toBe('');
   });
 });
