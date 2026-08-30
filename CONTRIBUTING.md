@@ -44,6 +44,25 @@ npm test --workspace=sep10-auth
 5. For release-related changes, add notes under `[Unreleased]` in the root `CHANGELOG.md`; maintainer release preparation moves those notes into a dated versioned entry.
 6. Open a PR referencing the issue number (`Fixes #123`) and describe what you changed and why.
 
+## Changeset policy
+
+Changesets document updates to packages for the release changelog. Follow this policy when deciding whether a change needs a changeset:
+
+**Changesets required for:**
+- Changes to a package's public API surface (new exports, modified function signatures, removed functions)
+- User-visible behavior changes to published packages (`sep10-auth`, `sanctions-oracle`, `horizon-listener`)
+- Dependency bumps that may affect users
+- Bug fixes in published packages
+
+**Changesets NOT required for:**
+- Internal refactors that don't change public APIs or behavior
+- Test-only changes
+- Documentation-only changes (README, JSDoc, comments)
+- CI/tooling changes or root-level workspace changes
+- License or metadata updates
+
+To create a changeset for your PR, run `npm run changeset` and follow the prompts. Include a clear summary of the change and which packages it affects.
+
 ## Branch protection (recommended)
 
 The repository intends to enforce the following branch protection rules on `main` to ensure

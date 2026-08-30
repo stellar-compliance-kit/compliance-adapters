@@ -123,6 +123,16 @@ npm run build
 npm run build --workspace=sep10-auth
 ```
 
+### Using the CLI
+
+The published `compliance-adapters` CLI provides command-line tools for managing compliance data. For example, to sync sanctions data to a contract in dry-run mode:
+
+```bash
+npx compliance-adapters sync-sanctions --dry-run --addresses ./sanctions-oracle/test/fixtures/addresses.json
+```
+
+Run `npx compliance-adapters --help` for available commands and `npx compliance-adapters sync-sanctions --help` for command-specific options.
+
 ### Building
 
 The root-level `npm run build` script runs the TypeScript compiler across all three packages
