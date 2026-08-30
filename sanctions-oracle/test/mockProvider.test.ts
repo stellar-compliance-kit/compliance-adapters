@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { StrKey } from '@stellar/stellar-sdk';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 
 const KNOWN_FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
@@ -13,6 +14,14 @@ function writeTempJson(data: unknown): string {
   fs.writeFileSync(filePath, JSON.stringify(data));
   return filePath;
 }
+
+describe('MOCK_FLAGGED_ADDRESSES', () => {
+  it('are not valid Ed25519 StrKeys, so they can never collide with a real account', () => {
+    for (const address of Object.keys(MOCK_FLAGGED_ADDRESSES)) {
+      expect(StrKey.isValidEd25519PublicKey(address)).toBe(false);
+    }
+  });
+});
 
 describe('MockSanctionsProvider.fromFile', () => {
   it('loads the default watchlist when no options are given', async () => {
