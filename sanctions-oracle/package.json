@@ -21,6 +21,7 @@
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1",
     "@compliance-adapters/logger": "*",
+    "@compliance-adapters/backoff": "*",
     "@compliance-adapters/tracing": "*",
     "@compliance-adapters/metrics": "*"
   },

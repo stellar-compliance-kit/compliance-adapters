@@ -114,6 +114,11 @@ address be blocked, and does the chain know that yet?", and `horizon-listener` a
 changed on-chain?". If a change doesn't fit any of the three questions above, it likely warrants a
 new package rather than being bolted onto an existing one — open an issue to discuss first.
 
+- **`logger`** — The shared cross-package dependency: a minimal `Logger` interface plus a
+  `consoleLogger` implementation, used instead of each package rolling its own logging shape.
+  Convention: library code should accept an optional `Logger` and default to `noopLogger`; only
+  CLI entrypoints should use `consoleLogger`/`console.*` directly.
+
 ## When to extract a shared package
 
 When you find yourself duplicating utility code across packages (retry logic, metrics, logging,

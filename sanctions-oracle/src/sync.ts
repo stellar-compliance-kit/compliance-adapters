@@ -29,7 +29,7 @@ import { RateLimitedSanctionsProvider } from './rateLimitedProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { withRetry, RetryOptions } from './retry';
-import { computeBackoffDelayMs, BackoffOptions } from './backoff';
+import { computeBackoffDelayMs, BackoffOptions } from '@compliance-adapters/backoff';
 
 interface CacheEntry {
   result: { flagged: boolean; source: string };
