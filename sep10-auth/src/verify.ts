@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Networks, Operation, WebAuth } from '@stellar/stellar-sdk';
+import { Networks, Operation, StrKey, WebAuth } from '@stellar/stellar-sdk';
 
 export interface VerifyChallengeOptions {
   serverAccountId: string;
@@ -35,6 +35,14 @@ export function verifyChallenge(
   signedTransactionXDR: string,
   options: VerifyChallengeOptions,
 ): VerifyResult {
+  if (!StrKey.isValidEd25519PublicKey(options.serverAccountId)) {
+    return {
+      valid: false,
+      address: '',
+      error: `sep10-auth: Invalid serverAccountId: ${options.serverAccountId}`,
+    };
+  }
+
   const networkPassphrase = options.networkPassphrase ?? Networks.TESTNET;
   const webAuthDomains = Array.isArray(options.webAuthDomain)
     ? options.webAuthDomain

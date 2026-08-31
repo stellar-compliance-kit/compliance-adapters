@@ -6,19 +6,20 @@
 /**
  * OpenTelemetry-compatible tracing for sanctions-oracle.
  *
- * See horizon-listener/src/tracing.ts for the full design rationale.
- * This module mirrors that design for the sanctions-oracle phases:
+ * The generic tracer machinery lives in `@compliance-adapters/tracing`
+ * (shared with horizon-listener). See that package for the full design
+ * rationale.
  *
  * Phases instrumented
  * ────────────────────
- * address_check   — each call to \`provider.checkAddress()\`
- * denylist_write  — each call to \`writer.addToDenylist()\`
+ * address_check   — each call to `provider.checkAddress()`
+ * denylist_write  — each call to `writer.addToDenylist()`
  *
  * Privacy
  * ───────
  * Stellar addresses are NOT attached to spans by default. They would increase
  * cardinality unboundedly and may constitute PII in some jurisdictions. The
- * \`redactPayload\` option (default: \`true\`) controls whether the \`address\`
+ * `redactPayload` option (default: `true`) controls whether the `address`
  * attribute is included; callers must opt-in to turn this off.
  */
 

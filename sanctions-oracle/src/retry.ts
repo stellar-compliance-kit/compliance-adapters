@@ -1,3 +1,10 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+import { computeBackoffDelayMs } from '@compliance-adapters/backoff';
+
 export interface RetryOptions {
   /** Total attempts before giving up, including the first. Defaults to 3. */
   maxAttempts?: number;
@@ -7,26 +14,6 @@ export interface RetryOptions {
   randomFn?: () => number;
   /** Injectable so tests don't have to wait out real backoff delays. */
   sleepFn?: (ms: number) => Promise<void>;
-}
-
-// Same growth curve as horizon-listener's computeBackoffDelayMs (base * 2^attempt,
-// capped, optional +/-50% jitter) reimplemented here so sanctions-oracle doesn't
-// need a cross-package dependency for one small function.
-function computeBackoffDelayMs(
-  attempt: number,
-  options: Required<Pick<RetryOptions, 'baseMs' | 'maxMs' | 'jitter' | 'randomFn'>>,
-): number {
-  const { baseMs, maxMs, jitter, randomFn } = options;
-
-  const uncapped = baseMs * 2 ** attempt;
-  const capped = Math.min(maxMs, uncapped);
-
-  if (!jitter) {
-    return capped;
-  }
-
-  const jitterFactor = 0.5 + randomFn() * 0.5;
-  return capped * jitterFactor;
 }
 
 const defaultSleep = (ms: number): Promise<void> =>

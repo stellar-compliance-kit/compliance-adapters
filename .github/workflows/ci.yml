@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [20.x]
+        node-version: [20.x, 22.x]
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +37,9 @@ jobs:
       - name: Check License Headers
         run: npm run check:license
 
+      - name: Check Root Changelog
+        run: npm run check:changelog
+
       - name: Build
         run: npm run build
 
@@ -60,13 +63,46 @@ jobs:
       - name: Audit dependencies
         run: npm audit --audit-level=high
 
+  test-sdk-compatibility:
+    name: SDK Compatibility Tests (Stellar SDK ${{ matrix.stellar-sdk-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20.x]
+        # Test every supported minor release in the current SDK major line.
+        stellar-sdk-version: ['16.0.1', '16.1.0', '16.2.0']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Stellar SDK ${{ matrix.stellar-sdk-version }}
+        run: npm install --no-save --package-lock=false @stellar/stellar-sdk@${{ matrix.stellar-sdk-version }}
+
+      - name: Verify Stellar SDK version
+        run: npm ls @stellar/stellar-sdk
+
+      - name: Build packages
+        run: npm run build
+
+      - name: Run end-to-end compatibility tests
+        run: npm run test:compatibility --workspace=e2e-tests
+
   benchmark:
     name: Performance Benchmark (sep10-auth)
     runs-on: ubuntu-latest
     needs: test-unit
     strategy:
       matrix:
-        node-version: [20.x]
+        node-version: [20.x, 22.x]
     steps:
       - uses: actions/checkout@v4
 
@@ -99,7 +135,7 @@ jobs:
     needs: [test-unit, benchmark]
     strategy:
       matrix:
-        node-version: [20.x]
+        node-version: [20.x, 22.x]
     steps:
       - uses: actions/checkout@v4
 
