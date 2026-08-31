@@ -16,8 +16,12 @@ export {
   AuditLogger,
   SyncOptions,
   SyncResult,
+  FailedAddress,
   RpcDenylistWriterOptions,
+  CliArgs,
+  toSafeLogString,
 } from './sync';
+export { SyncCheckpointStore, InMemoryCheckpointStore } from './checkpoint';
 export { withRetry, RetryOptions } from './retry';
 export {
   ProviderRegistry,

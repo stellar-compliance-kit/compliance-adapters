@@ -66,6 +66,11 @@ console.log('Authenticated as:', result.address);
 - `CsvSanctionsProvider`: Never throws — a missing/unreadable CSV file, a malformed row, or an invalid address is logged via `console.warn` and skipped; affected addresses are simply treated as unflagged. A duplicate address with differing sources is aggregated (sources joined with `,`) rather than silently overwritten.
 - `RpcDenylistWriter.addToDenylist()`: May throw on RPC/network failures
 
+**Logging Convention**:
+- `CliArgs.secretKey` is sensitive; never log the raw `CliArgs` object. Use
+  `toSafeLogString(args)` (from `sync.ts`), which masks `secretKey`, in any
+  debug logging of parsed args.
+
 **Consumer Expectations**:
 - **CLI users**: Check `process.exitCode` after execution; stderr contains error details
 - **Library users**: Wrap `syncSanctionsToDenylist` in try/catch; provider implementations should not throw

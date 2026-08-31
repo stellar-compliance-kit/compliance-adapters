@@ -10,17 +10,17 @@ export {
   type RawContractEvent,
   type RpcEventSourceOptions,
 } from './eventSource';
-export { computeBackoffDelayMs, type BackoffOptions } from './backoff';
+export { computeBackoffDelayMs, type BackoffOptions } from '@compliance-adapters/backoff';
 export { HttpWebhookSender, type WebhookSender, type HttpWebhookSenderOptions } from './webhook';
 export { createWebhookForwarder, type WebhookForwarderOptions } from './factory';
 export {
   MetricsRegistry,
   NoopMetricsRegistry,
   DEFAULT_HISTOGRAM_BUCKETS,
+  type Phase,
   type AnyMetricsRegistry,
   type Counter,
   type Histogram,
-  type Phase,
   type Outcome,
   type MetricsRegistryOptions,
 } from './metrics';

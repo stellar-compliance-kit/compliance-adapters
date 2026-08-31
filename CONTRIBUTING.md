@@ -41,7 +41,27 @@ npm test --workspace=sep10-auth
 2. Make your change, keeping it scoped to the linked issue.
 3. Add or update tests — PRs that touch behavior without test coverage will be asked to add it.
 4. Run `npm run lint` and `npm test` locally before opening a PR.
-5. Open a PR referencing the issue number (`Fixes #123`) and describe what you changed and why.
+5. For release-related changes, add notes under `[Unreleased]` in the root `CHANGELOG.md`; maintainer release preparation moves those notes into a dated versioned entry.
+6. Open a PR referencing the issue number (`Fixes #123`) and describe what you changed and why.
+
+## Changeset policy
+
+Changesets document updates to packages for the release changelog. Follow this policy when deciding whether a change needs a changeset:
+
+**Changesets required for:**
+- Changes to a package's public API surface (new exports, modified function signatures, removed functions)
+- User-visible behavior changes to published packages (`sep10-auth`, `sanctions-oracle`, `horizon-listener`)
+- Dependency bumps that may affect users
+- Bug fixes in published packages
+
+**Changesets NOT required for:**
+- Internal refactors that don't change public APIs or behavior
+- Test-only changes
+- Documentation-only changes (README, JSDoc, comments)
+- CI/tooling changes or root-level workspace changes
+- License or metadata updates
+
+To create a changeset for your PR, run `npm run changeset` and follow the prompts. Include a clear summary of the change and which packages it affects.
 
 ## Branch protection (recommended)
 
@@ -93,6 +113,29 @@ A rough mental model: `sep10-auth` answers "who is this?", `sanctions-oracle` an
 address be blocked, and does the chain know that yet?", and `horizon-listener` answers "what just
 changed on-chain?". If a change doesn't fit any of the three questions above, it likely warrants a
 new package rather than being bolted onto an existing one — open an issue to discuss first.
+
+- **`logger`** — The shared cross-package dependency: a minimal `Logger` interface plus a
+  `consoleLogger` implementation, used instead of each package rolling its own logging shape.
+  Convention: library code should accept an optional `Logger` and default to `noopLogger`; only
+  CLI entrypoints should use `consoleLogger`/`console.*` directly.
+
+## When to extract a shared package
+
+When you find yourself duplicating utility code across packages (retry logic, metrics, logging,
+backoff strategies), extract it into a new shared package under the monorepo root rather than
+repeating the code.
+
+**Decision criteria:**
+
+- **Already extracted example**: The `@compliance-adapters/logger` package demonstrates the
+  established pattern. When a utility is needed across package boundaries, it's extracted to its
+  own workspace with its own `package.json`, tests, and documentation. Follow this pattern.
+- **If used by just one package**: Keep it inside that package (e.g., a provider-specific utility
+  in `sanctions-oracle`).
+- **If used by two or more packages**: Extract to a new workspace. Examples of things that should
+  not be duplicated: metrics/tracing instrumentation, backoff/retry logic, common error types.
+- **Document the boundary**: Update this section of CONTRIBUTING.md if you create a new shared
+  package, including its purpose and which packages depend on it.
 
 ## Code style
 

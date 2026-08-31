@@ -41,6 +41,31 @@ they retry with exponential backoff up to a configurable number of
 attempts (`SyncOptions.retry`, default 3 attempts). If an address's
 provider check still fails after exhausting all attempts, that address is
 recorded in `SyncResult.failed` instead of aborting the whole sync run.
+`SyncResult.failedWithReasons` carries the same addresses paired with the
+message of the error that caused each one to fail, so callers can react to
+specific failure types programmatically without parsing log output.
+
+### Input validation
+
+Every input address is checked with `StrKey.isValidEd25519PublicKey()`
+**before** it reaches the provider. Entries that are not well-formed Stellar
+`G...` public keys (a typo, a truncated paste, a non-Stellar identifier) are
+never checked or written — they are reported in `SyncResult.invalid`, kept
+distinct from `SyncResult.failed` (which means "the provider couldn't
+determine an answer").
+
+### Resuming an interrupted sync
+
+Pass a `SyncOptions.checkpoint` store (interface `SyncCheckpointStore`, with
+an in-memory reference implementation `InMemoryCheckpointStore` — same
+"bring your own persistence" pattern as sep10-auth's `RevocationStore`) and
+the sync records each address as it finishes: clean addresses right after
+the provider check, flagged addresses only once their denylist write
+succeeds. On a later run with `resume: true`, any address the checkpoint
+already reports as complete is skipped (reported in `SyncResult.skipped`)
+instead of being re-checked and re-written — so a large sync that crashed
+after writing 500 of 2000 addresses picks up from 501 rather than paying
+the fees to re-write the first 500.
 
 ## The `SanctionsProvider` interface
 
@@ -324,6 +349,9 @@ The CLI submits one `add_to_denylist(address)` transaction per flagged address a
   "checked": 2,
   "flagged": ["GABC..."],
   "written": ["GABC..."],
+  "failed": [],
+  "invalid": [],
+  "skipped": [],
   "dryRun": false
 }
 ```
