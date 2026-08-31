@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
  * sep10-sanctions-gate — example Express app
  *
  * Demonstrates composing two compliance-adapters packages on a single route:

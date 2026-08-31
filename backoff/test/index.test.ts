@@ -1,4 +1,4 @@
-import { computeBackoffDelayMs } from '../src/backoff';
+import { computeBackoffDelayMs } from '../src/index';
 
 describe('computeBackoffDelayMs', () => {
   it('grows exponentially with the attempt number when jitter is disabled', () => {

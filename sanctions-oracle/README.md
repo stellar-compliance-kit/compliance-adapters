@@ -39,6 +39,9 @@ they retry with exponential backoff up to a configurable number of
 attempts (`SyncOptions.retry`, default 3 attempts). If an address's
 provider check still fails after exhausting all attempts, that address is
 recorded in `SyncResult.failed` instead of aborting the whole sync run.
+`SyncResult.failedWithReasons` carries the same addresses paired with the
+message of the error that caused each one to fail, so callers can react to
+specific failure types programmatically without parsing log output.
 
 ### Input validation
 

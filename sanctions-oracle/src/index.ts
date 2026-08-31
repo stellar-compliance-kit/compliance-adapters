@@ -5,6 +5,7 @@
 
 export { SanctionsProvider } from './SanctionsProvider';
 export { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from './mockProvider';
+export { CsvSanctionsProvider } from './csvProvider';
 export {
   syncSanctionsToDenylist,
   createRpcDenylistWriter,
@@ -15,7 +16,10 @@ export {
   AuditLogger,
   SyncOptions,
   SyncResult,
+  FailedAddress,
   RpcDenylistWriterOptions,
+  CliArgs,
+  toSafeLogString,
 } from './sync';
 export { SyncCheckpointStore, InMemoryCheckpointStore } from './checkpoint';
 export { withRetry, RetryOptions } from './retry';

@@ -180,6 +180,19 @@ README).
   authentication to the webhook payload (e.g. an HMAC over the body, or a bearer token) and/or
   independently re-verify important events against Soroban RPC directly before acting on them** —
   this package does not do that for you.
+- **Optional HMAC signing (`signingSecret`) and its replay-window trust model.** When
+  `HttpWebhookSenderOptions.signingSecret` is configured, requests instead carry an `X-Timestamp`
+  header (Unix seconds) and an `X-Signature: sha256=<hex hmac>` header computed over
+  `<timestamp>.<raw body>` (see `horizon-listener/README.md` for the full verification recipe).
+  This protects against the forgery scenario above **only if the receiver actually verifies both
+  headers**: recomputing the HMAC with a constant-time comparison confirms the request was signed
+  by a holder of `signingSecret`, and checking that `X-Timestamp` falls within a bounded freshness
+  window (e.g. 5 minutes) is what makes a captured request eventually stop being replayable. The
+  sender does not enforce this window itself — it only stamps the timestamp — so a receiver that
+  verifies the signature but skips the freshness check accepts a captured, validly-signed request
+  indefinitely. There is also no per-request nonce or idempotency tracking: within the freshness
+  window itself, a captured request can still be successfully replayed (once or many times) unless
+  the receiver separately tracks and rejects previously-seen `(X-Timestamp, X-Signature)` pairs.
 - **What a malicious or compromised receiver *cannot* do.** The trust relationship is one-way: the
   listener only reads the HTTP response status (`response.ok`) from the receiver and otherwise
   ignores the response body entirely. A compromised or malicious receiver cannot inject events,
