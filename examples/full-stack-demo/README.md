@@ -36,3 +36,18 @@ Use environment variables to customize runtime values:
 - `NETWORK_PASSPHRASE`
 - `HOME_DOMAIN`
 - `WEB_AUTH_DOMAIN`
+
+## Hardening features not wired into this demo
+
+This demo intentionally stays minimal, but each package it wires together has grown additional
+hardening features that a production deployment would typically layer on top:
+
+- **`sep10-auth`** — a `rateLimiter` middleware for throttling challenge/verify requests, and a
+  `RevocationStore` for invalidating previously-issued sessions.
+- **`sanctions-oracle`** — a `ProviderRegistry` for falling back across multiple sanctions data
+  sources, a `CsvSanctionsProvider` for loading watchlists from a CSV file instead of the mock
+  provider, and metrics/tracing instrumentation around sync runs.
+- **`horizon-listener`** — matching metrics/tracing instrumentation around event polling and
+  webhook delivery.
+
+See each package's own README for usage details.

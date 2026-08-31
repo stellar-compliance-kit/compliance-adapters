@@ -1,42 +1,41 @@
 /**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
  * OpenTelemetry-compatible tracing for sanctions-oracle.
  *
- * See horizon-listener/src/tracing.ts for the full design rationale.
- * This module mirrors that design for the sanctions-oracle phases:
+ * The generic tracer machinery lives in `@compliance-adapters/tracing`
+ * (shared with horizon-listener). See that package for the full design
+ * rationale.
  *
  * Phases instrumented
  * ────────────────────
- * address_check   — each call to \`provider.checkAddress()\`
- * denylist_write  — each call to \`writer.addToDenylist()\`
+ * address_check   — each call to `provider.checkAddress()`
+ * denylist_write  — each call to `writer.addToDenylist()`
  *
  * Privacy
  * ───────
  * Stellar addresses are NOT attached to spans by default. They would increase
  * cardinality unboundedly and may constitute PII in some jurisdictions. The
- * \`redactPayload\` option (default: \`true\`) controls whether the \`address\`
+ * `redactPayload` option (default: `true`) controls whether the `address`
  * attribute is included; callers must opt-in to turn this off.
  */
 
 // ── Span data model ───────────────────────────────────────────────────────────
 
-export type SpanStatus = 'ok' | 'error' | 'cancelled';
+// The span data model and trace context are shared with horizon-listener via
+// the runtime-free @compliance-adapters/tracing-types package so a context
+// produced by either package's tracer can be passed to the other's startSpan().
+import type {
+  SpanStatus,
+  SpanAttributes,
+  SpanData,
+  TracingContext,
+} from '@compliance-adapters/tracing-types';
 
-export interface SpanAttributes {
-  [key: string]: string | number | boolean | undefined;
-}
-
-export interface SpanData {
-  traceId: string;
-  spanId: string;
-  parentSpanId: string | undefined;
-  name: string;
-  startTimeMs: number;
-  endTimeMs: number;
-  durationMs: number;
-  status: SpanStatus;
-  attributes: SpanAttributes;
-  errorMessage?: string;
-}
+export type { SpanStatus, SpanAttributes, SpanData, TracingContext };
 
 // ── Live span handle ──────────────────────────────────────────────────────────
 
@@ -48,11 +47,6 @@ export interface Span {
 }
 
 // ── Tracer interface ──────────────────────────────────────────────────────────
-
-export interface TracingContext {
-  traceId: string;
-  spanId: string;
-}
 
 export interface Tracer {
   startSpan(name: string, parentContext?: TracingContext): Span;

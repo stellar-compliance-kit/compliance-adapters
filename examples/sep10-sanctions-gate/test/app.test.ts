@@ -72,6 +72,15 @@ const FLAGGED_ADDRESS = Object.keys(MOCK_FLAGGED_ADDRESSES)[0];
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
+describe('GET /health', () => {
+  it('returns 200 with { status: ok } without any authentication', async () => {
+    const res = await request(app).get('/health');
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ status: 'ok' });
+  });
+});
+
 describe('GET /gated', () => {
   // ── 401: no auth header ────────────────────────────────────────────────────
   it('returns 401 when no Authorization header is provided', async () => {

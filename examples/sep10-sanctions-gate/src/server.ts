@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
  * Entry point — instantiates the gated Express app and starts listening.
  *
  * Configuration is read from environment variables so the same binary works

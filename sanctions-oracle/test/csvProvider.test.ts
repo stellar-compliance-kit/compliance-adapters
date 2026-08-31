@@ -116,7 +116,8 @@ describe('CsvSanctionsProvider', () => {
 
     it('trims whitespace around address and source columns', async () => {
       const csvPath = writeTempCsv(
-        'address,source\n' + '  GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66  ,  padded-source  \n',
+        'address,source\n' +
+          '  GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66  ,  padded-source  \n',
       );
       const provider = new CsvSanctionsProvider(csvPath);
       const result = await provider.checkAddress(
@@ -126,18 +127,85 @@ describe('CsvSanctionsProvider', () => {
       expect(result.source).toBe('padded-source');
     });
 
-    it('keeps only the last value when the same address appears in multiple rows', async () => {
+    it('aggregates distinct sources when the same address appears in multiple rows', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const csvPath = writeTempCsv(
+          'address,source\n' +
+            'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66,first-source\n' +
+            'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66,second-source\n',
+        );
+        const provider = new CsvSanctionsProvider(csvPath);
+        const result = await provider.checkAddress(
+          'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66',
+        );
+        expect(result.flagged).toBe(true);
+        expect(result.source).toBe('first-source,second-source');
+        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('appears more than once'));
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('warns but does not duplicate when the same address+source pair repeats', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const csvPath = writeTempCsv(
+          'address,source\n' +
+            'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66,dup-source\n' +
+            'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66,dup-source\n',
+        );
+        const provider = new CsvSanctionsProvider(csvPath);
+        const result = await provider.checkAddress(
+          'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66',
+        );
+        expect(result.flagged).toBe(true);
+        expect(result.source).toBe('dup-source');
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('the duplicate row was ignored'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('parses RFC 4180 quoted source fields that contain commas', async () => {
       const csvPath = writeTempCsv(
         'address,source\n' +
-          'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66,first-source\n' +
-          'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66,second-source\n',
+          'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66,"OFAC, SDN List"\n',
       );
       const provider = new CsvSanctionsProvider(csvPath);
       const result = await provider.checkAddress(
         'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66',
       );
       expect(result.flagged).toBe(true);
-      expect(result.source).toBe('second-source');
+      expect(result.source).toBe('OFAC, SDN List');
+    });
+
+    it('handles a quoted address column and CRLF line endings', async () => {
+      const csvPath = writeTempCsv(
+        'address,source\r\n' +
+          '"GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66","list-a"\r\n',
+      );
+      const provider = new CsvSanctionsProvider(csvPath);
+      const result = await provider.checkAddress(
+        'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66',
+      );
+      expect(result.flagged).toBe(true);
+      expect(result.source).toBe('list-a');
+    });
+
+    it('ignores a leading UTF-8 BOM on the header row', async () => {
+      const csvPath = writeTempCsv(
+        '﻿address,source\n' +
+          'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66,bom-source\n',
+      );
+      const provider = new CsvSanctionsProvider(csvPath);
+      const result = await provider.checkAddress(
+        'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66',
+      );
+      expect(result.flagged).toBe(true);
+      expect(result.source).toBe('bom-source');
     });
   });
 

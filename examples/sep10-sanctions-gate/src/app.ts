@@ -1,4 +1,9 @@
 /**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
+/**
  * sep10-sanctions-gate — example Express app
  *
  * Demonstrates composing two compliance-adapters packages on a single route:
@@ -85,6 +90,14 @@ export function createApp(options: GatedAppOptions): express.Application {
     // Address is clean — pass control to the route handler.
     next();
   };
+
+  // ── Health-check route ───────────────────────────────────────────────────
+  // Unauthenticated liveness probe for container orchestrators and load
+  // balancer health checks.  Must be registered before the SEP-10 middleware
+  // so it is never accidentally gated behind auth.
+  app.get('/health', (_req: Request, res: Response): void => {
+    res.status(200).json({ status: 'ok' });
+  });
 
   // ── Gated route ──────────────────────────────────────────────────────────
   // Apply both middleware in order: auth first, sanctions second.
