@@ -712,6 +712,9 @@ export function parseArgs(argv: string[]): CliArgs {
 }
 
 function printHelp(): void {
+  // CLI-only: help text is written straight to stdout by convention, not routed
+  // through an injectable Logger.
+  // eslint-disable-next-line no-console
   console.log(`
 sanctions-oracle sync - Synchronize sanctions data to a Soroban denylist
 
@@ -789,7 +792,9 @@ export async function runCli(argv?: string[]): Promise<void> {
     addresses = parsed;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Failed to load addresses from ${args.addressesPath}: ${message}`);
+    logger.error(
+      `sanctions-oracle: Failed to load addresses from ${args.addressesPath}: ${message}`,
+    );
     process.exitCode = 1;
     return;
   }
@@ -826,7 +831,10 @@ export async function runCli(argv?: string[]): Promise<void> {
       dryRun: true,
       logger,
     });
-    logger.info?.('sanctions-oracle: dry-run result', result);
+    logger.info('sanctions-oracle: dry-run result', result);
+    // CLI-only: the machine-readable result is written to stdout so it can be
+    // piped/redirected independently of the human-readable logger stream.
+    // eslint-disable-next-line no-console
     console.log(JSON.stringify(result, null, 2));
     return;
   }
@@ -858,11 +866,16 @@ export async function runCli(argv?: string[]): Promise<void> {
     dryRun: false,
     logger,
   });
+  // CLI-only: machine-readable result to stdout (see dry-run branch above).
+  // eslint-disable-next-line no-console
   console.log(JSON.stringify(result, null, 2));
 }
 
 if (require.main === module) {
   runCli().catch((err) => {
+    // CLI-only: last-resort crash handler for the binary entrypoint; no logger
+    // is in scope here.
+    // eslint-disable-next-line no-console
     console.error('sanctions-oracle:', err);
     process.exitCode = 1;
   });

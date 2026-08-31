@@ -19,7 +19,11 @@
   },
   "overrides": [
     {
-      "files": ["sep10-auth/**/*.ts"],
+      "files": [
+        "sep10-auth/**/*.ts",
+        "sanctions-oracle/src/**/*.ts",
+        "horizon-listener/src/**/*.ts"
+      ],
       "rules": {
         "no-console": "error"
       }
