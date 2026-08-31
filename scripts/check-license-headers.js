@@ -1,7 +1,21 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 const fs = require('fs');
 const path = require('path');
 
-const TARGET_DIRS = ['logger/src', 'sep10-auth/src', 'sanctions-oracle/src', 'horizon-listener/src'];
+const TARGET_DIRS = [
+  'sep10-auth/src',
+  'sanctions-oracle/src',
+  'horizon-listener/src',
+  'logger/src',
+  'bin',
+  'scripts',
+  'examples/sep10-sanctions-gate/src',
+  'examples/full-stack-demo',
+];
 
 const REQUIRED_HEADER_PATTERNS = [
   /Copyright \(c\) \d{4} stellar-compliance-kit/i,

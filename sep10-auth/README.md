@@ -127,6 +127,16 @@ sliding-window in-memory counter. Useful for protecting the challenge
 generation endpoint (or any other endpoint) from being hammered by a single
 client.
 
+> **`trust proxy` required behind a reverse proxy or load balancer**: the
+> default key generator keys on `req.ip`, which only reflects the real
+> client IP when Express's `app.set('trust proxy', ...)` is configured
+> correctly for your deployment. Without it, every request appears to
+> come from the proxy's IP, collapsing the rate limit to a single shared
+> bucket for all clients. See the
+> [Express `trust proxy` docs](https://expressjs.com/en/guide/behind-proxies.html)
+> and set it to match your infrastructure (e.g. the number of trusted
+> hops, or `true` only if you fully control the proxy).
+
 ```ts
 import express from 'express';
 import { rateLimiter } from 'sep10-auth';

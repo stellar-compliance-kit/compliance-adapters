@@ -12,13 +12,24 @@ import {
   nativeToScVal,
   rpc,
 } from '@stellar/stellar-sdk';
-import { type Logger, noopLogger, consoleLogger } from '@compliance-adapters/logger';
+import {
+  type Logger as StructuredLogger,
+  noopLogger,
+  consoleLogger,
+} from '@compliance-adapters/logger';
+
+export type Logger = Partial<StructuredLogger> & {
+  /** Legacy progress-log method retained for older integrations. */
+  log?: (...args: unknown[]) => void;
+};
 import { SanctionsProvider } from './SanctionsProvider';
 import { MockSanctionsProvider } from './mockProvider';
+import { CsvSanctionsProvider } from './csvProvider';
+import { RateLimitedSanctionsProvider } from './rateLimitedProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { withRetry, RetryOptions } from './retry';
-import { computeBackoffDelayMs, BackoffOptions } from './backoff';
+import { computeBackoffDelayMs, BackoffOptions } from '@compliance-adapters/backoff';
 
 interface CacheEntry {
   result: { flagged: boolean; source: string };
@@ -32,13 +43,17 @@ interface CacheEntry {
 export class ProviderResultCache {
   private cache: Map<string, CacheEntry> = new Map();
   private readonly ttlMs: number;
+  private readonly maxEntries?: number;
 
   /**
    * Create a result cache with a specified time-to-live (TTL).
    * @param ttlMs Time-to-live for cached results in milliseconds
+   * @param maxEntries Optional maximum number of entries to retain. When set,
+   * the least-recently-used entry is evicted once the cache would exceed this size.
    */
-  constructor(ttlMs: number = 3600000) {
+  constructor(ttlMs: number = 3600000, maxEntries?: number) {
     this.ttlMs = ttlMs;
+    this.maxEntries = maxEntries;
   }
 
   /**
@@ -55,6 +70,10 @@ export class ProviderResultCache {
       return undefined;
     }
 
+    // Refresh recency for LRU eviction.
+    this.cache.delete(address);
+    this.cache.set(address, entry);
+
     return entry.result;
   }
 
@@ -62,10 +81,27 @@ export class ProviderResultCache {
    * Store a result in the cache.
    */
   set(address: string, result: { flagged: boolean; source: string }): void {
+    this.cache.delete(address);
     this.cache.set(address, {
       result,
       timestamp: Date.now(),
     });
+
+    if (this.maxEntries !== undefined) {
+      while (this.cache.size > this.maxEntries) {
+        const oldestKey = this.cache.keys().next().value;
+        if (oldestKey === undefined) break;
+        this.cache.delete(oldestKey);
+      }
+    }
+  }
+
+  /**
+   * Remove a single cached entry, e.g. after an operator determines it's stale.
+   * @returns Whether an entry was present and removed.
+   */
+  delete(address: string): boolean {
+    return this.cache.delete(address);
   }
 
   /**
@@ -127,6 +163,10 @@ export interface SyncOptions {
    * Defaults to unlimited (sequential processing).
    */
   concurrency?: number;
+  /**
+   * Existing denylist entries that should not be written again.
+   */
+  currentDenylist?: string[];
   /**
    * Optional metrics registry.  Pass a `MetricsRegistry` instance to record
    * per-phase counters and latency histograms for `address_check` and
@@ -206,11 +246,12 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     cache,
     progressInterval = 100,
     concurrency,
+    currentDenylist = [],
     metrics = new NoopMetricsRegistry(),
     tracer = new NoopTracer(),
   } = options;
 
-  logger.info('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
+  logger.info?.('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
 
   const uniqueAddresses = Array.from(new Set(addresses));
   const flagged: string[] = [];
@@ -249,7 +290,8 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
       } finally {
         checked += 1;
         if (checked % progressInterval === 0) {
-          logger.debug(
+          options.logger?.log?.(`Progress: ${checked}/${uniqueAddresses.length} addresses checked`);
+          logger.debug?.(
             `sanctions-oracle: progress ${checked}/${uniqueAddresses.length} addresses checked`,
           );
         }
@@ -258,7 +300,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     concurrency,
   );
 
-  logger.info('sanctions-oracle: screening complete', {
+  logger.info?.('sanctions-oracle: screening complete', {
     checked: addresses.length,
     flagged: flagged.length,
   });
@@ -266,10 +308,14 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   const written: string[] = [];
   if (dryRun) {
     for (const { address } of flaggedWithSource) {
-      logger.info('sanctions-oracle: [dry-run] would call add_to_denylist', { address });
+      logger.info?.('sanctions-oracle: [dry-run] would call add_to_denylist', { address });
     }
   } else {
+    const currentDenylistSet = new Set(currentDenylist);
     for (const { address, source } of flaggedWithSource) {
+      if (currentDenylistSet.has(address)) {
+        continue;
+      }
       const start = Date.now();
       const span = tracer.startSpan('denylist_write');
       try {
@@ -293,7 +339,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         span.setAttribute('denylist_write.tx_hash', result.hash);
         span.end('ok');
         written.push(address);
-        logger.info('sanctions-oracle: address written to denylist', {
+        logger.info?.('sanctions-oracle: address written to denylist', {
           address,
           hash: result.hash,
         });
@@ -316,7 +362,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   };
 }
 
-export interface RpcDenylistWriterOptions {
+interface RpcDenylistWriterOptions {
   rpcUrl: string;
   networkPassphrase: string;
   contractId: string;
@@ -339,7 +385,7 @@ export interface RpcDenylistWriterOptions {
    * Optional logger used to record an audit-logging failure without failing
    * the write it accompanies. Defaults to a no-op logger.
    */
-  logger?: Logger;
+  logger?: StructuredLogger;
 }
 
 // Kept behind the DenylistWriter interface (rather than called directly
@@ -429,7 +475,7 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
           // The on-chain write above already succeeded — an audit-logging
           // failure must not fail this address's write or propagate up
           // through syncSanctionsToDenylist's write loop.
-          logger.error('sanctions-oracle: audit logger failed after successful denylist write', {
+          logger.error?.('sanctions-oracle: audit logger failed after successful denylist write', {
             address,
             txHash: hash,
             error: error instanceof Error ? error.message : String(error),
@@ -450,6 +496,20 @@ export interface CliArgs {
   networkPassphrase?: string;
   secretKey?: string;
   help?: boolean;
+  /** Path to a CSV file of flagged addresses, used to build a CsvSanctionsProvider. */
+  csvPath?: string;
+  /** Path to a module exporting a SanctionsProvider-compatible default export. */
+  providerModulePath?: string;
+  /** Wrap the selected provider with RateLimitedSanctionsProvider's backoff/concurrency protection. */
+  rateLimit?: boolean;
+}
+
+/**
+ * Returns a copy of `args` safe for logging, with `secretKey` masked.
+ * Use this instead of logging the raw `CliArgs` object.
+ */
+export function toSafeLogString(args: CliArgs): string {
+  return JSON.stringify({ ...args, secretKey: args.secretKey ? '[REDACTED]' : undefined });
 }
 
 export function parseArgs(argv: string[]): CliArgs {
@@ -475,6 +535,15 @@ export function parseArgs(argv: string[]): CliArgs {
       case '--secret-key':
         args.secretKey = argv[++i];
         break;
+      case '--csv':
+        args.csvPath = argv[++i];
+        break;
+      case '--provider-module':
+        args.providerModulePath = argv[++i];
+        break;
+      case '--rate-limit':
+        args.rateLimit = true;
+        break;
       case '--help':
       case '-h':
         args.help = true;
@@ -498,21 +567,29 @@ OPTIONS:
   --contract-id <id>          Soroban contract ID (required for live sync)
   --rpc-url <url>             Soroban RPC endpoint URL (required for live sync)
   --network-passphrase <str>  Network passphrase (required for live sync)
-  --secret-key <key>          Source account secret key (required for live sync)
+  --secret-key <key>          Source account secret key (required for live sync unless
+                               SANCTIONS_ORACLE_SECRET_KEY is set; discouraged outside
+                               local testing since it is visible in shell history/process lists)
+  --csv <path>                Use a CsvSanctionsProvider backed by the given CSV file
+  --provider-module <path>    Dynamically import a module whose default export is a
+                               SanctionsProvider to use instead of the mock/CSV provider
+  --rate-limit                Wrap the selected provider with RateLimitedSanctionsProvider
   --dry-run                   Preview output without writing to the contract
   --help, -h                  Show this help message
+
+ENVIRONMENT:
+  SANCTIONS_ORACLE_SECRET_KEY  Source account secret key (preferred over --secret-key)
 
 EXAMPLES:
   # Dry-run mode: check addresses without writing
   sanctions-oracle sync --addresses addresses.json --dry-run
 
-  # Live mode: sync flagged addresses to contract
-  sanctions-oracle sync \\
+  # Live mode: sync flagged addresses to contract (preferred, via env var)
+  SANCTIONS_ORACLE_SECRET_KEY=SBXXXX sanctions-oracle sync \\
     --addresses addresses.json \\
     --contract-id CXXXX \\
     --rpc-url https://soroban-testnet.stellar.org \\
-    --network-passphrase "Test SDF Network ; September 2015" \\
-    --secret-key SBXXXX
+    --network-passphrase "Test SDF Network ; September 2015"
   `);
 }
 
@@ -530,7 +607,7 @@ export async function runCli(argv?: string[]): Promise<void> {
   }
 
   if (!args.addressesPath) {
-    logger.error('sanctions-oracle: Missing required flag: --addresses <path-to-json-array>');
+    logger.error?.('sanctions-oracle: Missing required flag: --addresses <path-to-json-array>');
     process.exitCode = 1;
     return;
   }
@@ -544,6 +621,15 @@ export async function runCli(argv?: string[]): Promise<void> {
     if (!parsed.every((item) => typeof item === 'string')) {
       throw new Error('All entries in the addresses array must be strings');
     }
+    const emptyStrings = parsed.filter((addr) => addr === '');
+    if (emptyStrings.length > 0) {
+      throw new Error(`Addresses file contains ${emptyStrings.length} empty string entries`);
+    }
+    const uniqueAddresses = Array.from(new Set(parsed));
+    const duplicateCount = parsed.length - uniqueAddresses.length;
+    if (duplicateCount > 0) {
+      logger.info(`sanctions-oracle: deduplicating ${duplicateCount} duplicate addresses`);
+    }
     addresses = parsed;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -551,9 +637,26 @@ export async function runCli(argv?: string[]): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  // CLI ships only the reference mock provider; wiring a real provider is
-  // left to consumers embedding syncSanctionsToDenylist programmatically.
-  const provider = new MockSanctionsProvider();
+  let provider: SanctionsProvider;
+  if (args.providerModulePath) {
+    try {
+      const imported = await import(args.providerModulePath);
+      provider = (imported.default ?? imported) as SanctionsProvider;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`Failed to load provider module ${args.providerModulePath}: ${message}`);
+      process.exitCode = 1;
+      return;
+    }
+  } else if (args.csvPath) {
+    provider = new CsvSanctionsProvider(args.csvPath);
+  } else {
+    provider = new MockSanctionsProvider();
+  }
+
+  if (args.rateLimit) {
+    provider = new RateLimitedSanctionsProvider(provider);
+  }
 
   if (args.dryRun) {
     const result = await syncSanctionsToDenylist({
@@ -567,14 +670,19 @@ export async function runCli(argv?: string[]): Promise<void> {
       dryRun: true,
       logger,
     });
-    logger.info('sanctions-oracle: dry-run result', result);
+    logger.info?.('sanctions-oracle: dry-run result', result);
     console.log(JSON.stringify(result, null, 2));
     return;
   }
 
-  if (!args.contractId || !args.rpcUrl || !args.networkPassphrase || !args.secretKey) {
-    logger.error(
-      'sanctions-oracle: Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, --secret-key (or pass --dry-run).',
+  // Prefer the environment variable over --secret-key: CLI args are visible
+  // in shell history and process listings (e.g. `ps`), which the flag alone
+  // is vulnerable to.
+  const secretKey = process.env.SANCTIONS_ORACLE_SECRET_KEY ?? args.secretKey;
+
+  if (!args.contractId || !args.rpcUrl || !args.networkPassphrase || !secretKey) {
+    logger.error?.(
+      'sanctions-oracle: Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, and SANCTIONS_ORACLE_SECRET_KEY (env, preferred) or --secret-key (or pass --dry-run).',
     );
     process.exitCode = 1;
     return;
@@ -584,7 +692,7 @@ export async function runCli(argv?: string[]): Promise<void> {
     rpcUrl: args.rpcUrl,
     networkPassphrase: args.networkPassphrase,
     contractId: args.contractId,
-    sourceKeypair: Keypair.fromSecret(args.secretKey),
+    sourceKeypair: Keypair.fromSecret(secretKey),
   });
 
   const result = await syncSanctionsToDenylist({

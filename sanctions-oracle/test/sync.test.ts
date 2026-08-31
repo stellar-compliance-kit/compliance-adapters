@@ -910,6 +910,36 @@ describe('runCli', () => {
     console.log = originalConsoleLog;
   });
 
+  describe('addresses file validation', () => {
+    it('rejects addresses file with empty string entries', async () => {
+      const addressesFile = '/tmp/test-addresses-empty.json';
+      const addresses = ['GTEST1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', '', 'GTEST2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'];
+      fs.writeFileSync(addressesFile, JSON.stringify(addresses));
+
+      await runCli(['--addresses', addressesFile, '--dry-run']);
+
+      expect(process.exitCode).toBe(1);
+      const output = consoleErrors.join('\n');
+      expect(output).toContain('empty string');
+
+      fs.unlinkSync(addressesFile);
+    });
+
+    it('logs when addresses file contains duplicate entries', async () => {
+      const addressesFile = '/tmp/test-addresses-dups.json';
+      const addresses = [FLAGGED_ADDRESS, CLEAN_ADDRESS, FLAGGED_ADDRESS, CLEAN_ADDRESS];
+      fs.writeFileSync(addressesFile, JSON.stringify(addresses));
+
+      await runCli(['--addresses', addressesFile, '--dry-run']);
+
+      const output = consoleLogs.join('\n');
+      expect(output).toContain('deduplicating');
+      expect(output).toContain('2');
+
+      fs.unlinkSync(addressesFile);
+    });
+  });
+
   it('shows help when --help flag is passed', async () => {
     await runCli(['--help']);
     const output = consoleLogs.join('\n');

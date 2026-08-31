@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 import { SanctionsProvider } from './SanctionsProvider';
 
 export type ConflictResolutionPolicy = 'any-flag-wins' | 'majority-vote' | 'priority-override';
