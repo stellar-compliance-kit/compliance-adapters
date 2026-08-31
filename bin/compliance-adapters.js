@@ -1,76 +1,325 @@
 #!/usr/bin/env node
-/**
- * Copyright (c) 2026 stellar-compliance-kit
- * SPDX-License-Identifier: MIT
- */
-
-/**
- * Copyright (c) 2026 stellar-compliance-kit
- * SPDX-License-Identifier: MIT
- */
-
 'use strict';
 
+/**
+ * bin/compliance-adapters.js
+ *
+ * Unified CLI for the compliance-adapters monorepo.
+ *
+ * Usage:
+ *   compliance-adapters <command> [options]
+ *
+ * Commands:
+ *   sync-sanctions   Push flagged addresses into a deployed denylist-gate contract
+ *   listen           Poll Soroban RPC for contract events and forward to a webhook
+ *
+ * Run `compliance-adapters <command> --help` for command-specific flags.
+ */
+
 const COMMANDS = {
-  'sync-sanctions': {
-    description: 'Sync flagged addresses into a denylist-gate contract',
-    flags: [
-      ['--addresses <path>', 'Path to JSON array of candidate addresses (required)'],
-      ['--dry-run', 'Log what would happen without submitting transactions'],
-      ['--contract-id <id>', 'Soroban contract ID (required for live sync)'],
-      ['--rpc-url <url>', 'Soroban RPC endpoint (required for live sync)'],
-      ['--network-passphrase <passphrase>', 'Stellar network passphrase (required for live sync)'],
-      ['--secret-key <key>', 'Signing secret key (required for live sync)'],
-    ],
-  },
+  'sync-sanctions': runSyncSanctions,
+  listen: runListen,
 };
 
-function printUsage() {
-  console.log('Usage: compliance-adapters <command> [options]\n');
-  console.log('Commands:');
-  for (const [name, cmd] of Object.entries(COMMANDS)) {
-    console.log(`  ${name}    ${cmd.description}`);
-  }
-  console.log('\nRun compliance-adapters <command> --help for command-specific options.');
-}
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
 
-function printCommandHelp(name, cmd) {
-  console.log(`Usage: compliance-adapters ${name} [options]\n`);
-  console.log(`${cmd.description}\n`);
-  console.log('Options:');
-  for (const [flag, desc] of cmd.flags) {
-    console.log(`  ${flag.padEnd(40)} ${desc}`);
-  }
-}
-
-const args = process.argv.slice(2);
-const command = args[0];
+const [, , command, ...rest] = process.argv;
 
 if (!command || command === '--help' || command === '-h') {
   printUsage();
   process.exit(0);
 }
 
-const cmdDef = COMMANDS[command];
-if (!cmdDef) {
-  console.error(`Unknown command: ${command}\n`);
+const handler = COMMANDS[command];
+if (!handler) {
+  console.error(`Unknown command: "${command}"\n`);
   printUsage();
   process.exit(1);
 }
 
-const commandArgs = args.slice(1);
+handler(rest).catch((err) => {
+  console.error(err.message ?? err);
+  process.exitCode = 1;
+});
 
-if (commandArgs.includes('--help') || commandArgs.includes('-h')) {
-  printCommandHelp(command, cmdDef);
-  process.exit(0);
+// ---------------------------------------------------------------------------
+// Global usage
+// ---------------------------------------------------------------------------
+
+function printUsage() {
+  console.log(`
+compliance-adapters <command> [options]
+
+Commands:
+  sync-sanctions   Push flagged addresses into a deployed denylist-gate contract
+  listen           Poll Soroban RPC for contract events and forward to a webhook
+
+Options:
+  --help, -h       Show this help message
+
+Run \`compliance-adapters <command> --help\` for command-specific flags.
+`.trim());
 }
 
-if (command === 'sync-sanctions') {
-  // Rewrite process.argv so the sync script's parseArgs sees the right flags.
-  process.argv = [process.argv[0], process.argv[1], ...commandArgs];
-  const { runCli } = require('../sanctions-oracle/dist/sync.js');
-  runCli().catch((err) => {
-    console.error(err);
+// ---------------------------------------------------------------------------
+// sync-sanctions command
+// ---------------------------------------------------------------------------
+
+/**
+ * Flags:
+ *   --addresses <path>          Path to a JSON array of Stellar addresses to check
+ *   --dry-run                   Log what would happen without submitting any transactions
+ *   --contract-id <id>          Deployed denylist-gate contract ID
+ *   --rpc-url <url>             Soroban RPC endpoint
+ *   --network-passphrase <str>  Stellar network passphrase
+ *   --secret-key <key>          Source account secret key for signing transactions
+ *   --help                      Show this help message
+ */
+async function runSyncSanctions(argv) {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    console.log(`
+compliance-adapters sync-sanctions [options]
+
+Push flagged addresses into a deployed denylist-gate contract via Soroban RPC.
+
+Options:
+  --addresses <path>          Path to a JSON array of Stellar addresses (required)
+  --dry-run                   Print what would be written without submitting transactions
+  --contract-id <id>          Deployed denylist-gate contract ID (required unless --dry-run)
+  --rpc-url <url>             Soroban RPC endpoint (required unless --dry-run)
+  --network-passphrase <str>  Stellar network passphrase (default: testnet)
+  --secret-key <key>          Source account secret key (required unless --dry-run)
+  --help                      Show this help message
+`.trim());
+    return;
+  }
+
+  const fs = require('fs');
+  const args = parseFlags(argv);
+
+  if (!args['addresses']) {
+    console.error('Missing required flag: --addresses <path-to-json-array>');
     process.exitCode = 1;
+    return;
+  }
+
+  const { MockSanctionsProvider, syncSanctionsToDenylist, createRpcDenylistWriter } =
+    require('../sanctions-oracle/dist/index.js');
+  const { Keypair, Networks } = require('@stellar/stellar-sdk');
+
+  const addresses = JSON.parse(fs.readFileSync(args['addresses'], 'utf8'));
+  const provider = new MockSanctionsProvider();
+  const dryRun = 'dry-run' in args;
+  const networkPassphrase = args['network-passphrase'] ?? Networks.TESTNET;
+
+  if (dryRun) {
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses,
+      writer: {
+        async addToDenylist() {
+          throw new Error('addToDenylist must not be called in dry-run mode');
+        },
+      },
+      dryRun: true,
+    });
+    console.log(JSON.stringify(result, null, 2));
+    return;
+  }
+
+  const missingFlags = ['contract-id', 'rpc-url', 'secret-key'].filter((f) => !args[f]);
+  if (missingFlags.length > 0) {
+    console.error(
+      `Missing required flags for live sync: ${missingFlags.map((f) => `--${f}`).join(', ')}`,
+      '\n(or pass --dry-run to skip transaction submission)',
+    );
+    process.exitCode = 1;
+    return;
+  }
+
+  const writer = createRpcDenylistWriter({
+    rpcUrl: args['rpc-url'],
+    networkPassphrase,
+    contractId: args['contract-id'],
+    sourceKeypair: Keypair.fromSecret(args['secret-key']),
   });
+
+  const result = await syncSanctionsToDenylist({ provider, addresses, writer, dryRun: false });
+  console.log(JSON.stringify(result, null, 2));
+}
+
+// ---------------------------------------------------------------------------
+// listen command (#285)
+// ---------------------------------------------------------------------------
+
+/**
+ * Flags:
+ *   --contract-id <id>          Deployed contract ID to filter events for (required, repeatable)
+ *   --rpc-url <url>             Soroban RPC endpoint (default: testnet)
+ *   --network-passphrase <str>  Stellar network passphrase (default: testnet)
+ *   --webhook-url <url>         Webhook to POST events to (required)
+ *   --start-ledger <n>          Starting ledger for the first poll (default: none)
+ *   --poll-interval-ms <n>      Polling interval in milliseconds (default: 5000)
+ *   --max-retries <n>           Max consecutive poll failures before exiting (default: 10)
+ *   --help                      Show this help message
+ */
+async function runListen(argv) {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    console.log(`
+compliance-adapters listen [options]
+
+Poll Soroban RPC for contract events and forward each one to a webhook URL.
+
+Options:
+  --contract-id <id>          Contract ID to watch (required; repeat for multiple contracts)
+  --rpc-url <url>             Soroban RPC endpoint (default: https://soroban-testnet.stellar.org)
+  --network-passphrase <str>  Stellar network passphrase (default: testnet)
+  --webhook-url <url>         Webhook endpoint to POST events to (required)
+  --start-ledger <n>          Starting ledger for the very first poll (omit to use cursor-only)
+  --poll-interval-ms <n>      Milliseconds between polls (default: 5000)
+  --max-retries <n>           Max consecutive failures before the process exits (default: 10)
+  --help                      Show this help message
+
+Examples:
+  # Dry-run: print events to stdout instead of sending to a webhook
+  compliance-adapters listen \\
+    --contract-id CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABH4M \\
+    --rpc-url https://soroban-testnet.stellar.org \\
+    --webhook-url http://localhost:9000/events \\
+    --start-ledger 100000
+
+  # Multiple contracts
+  compliance-adapters listen \\
+    --contract-id <denylist-id> \\
+    --contract-id <allowlist-id> \\
+    --webhook-url https://my-service.example.com/stellar-events
+`.trim());
+    return;
+  }
+
+  const { Networks } = require('@stellar/stellar-sdk');
+  const { HorizonListener, RpcEventSource, HttpWebhookSender } =
+    require('../horizon-listener/dist/index.js');
+
+  // --contract-id is multi-value; collect all occurrences
+  const contractIds = collectRepeatedFlag(argv, '--contract-id');
+  const args = parseFlags(argv);
+
+  const rpcUrl = args['rpc-url'] ?? 'https://soroban-testnet.stellar.org';
+  const networkPassphrase = args['network-passphrase'] ?? Networks.TESTNET;
+  const webhookUrl = args['webhook-url'] ?? null;
+  const startLedger = args['start-ledger'] ? parseInt(args['start-ledger'], 10) : undefined;
+  const pollIntervalMs = args['poll-interval-ms'] ? parseInt(args['poll-interval-ms'], 10) : 5000;
+  const maxRetries = args['max-retries'] ? parseInt(args['max-retries'], 10) : 10;
+
+  if (contractIds.length === 0) {
+    console.error('Missing required flag: --contract-id <id>');
+    process.exitCode = 1;
+    return;
+  }
+
+  if (!webhookUrl) {
+    console.error('Missing required flag: --webhook-url <url>');
+    process.exitCode = 1;
+    return;
+  }
+
+  const eventSource = new RpcEventSource({
+    rpcUrl,
+    networkPassphrase,
+    contractIds,
+    startLedger,
+  });
+
+  const webhookSender = new HttpWebhookSender({ url: webhookUrl });
+
+  const listener = new HorizonListener({
+    eventSource,
+    async onEvent(event) {
+      console.info('[listen] event received:', JSON.stringify(event));
+      await webhookSender.send(event);
+    },
+    pollIntervalMs,
+    maxRetries,
+    logger: {
+      debug: (...a) => console.debug('[listen]', ...a),
+      info: (...a) => console.info('[listen]', ...a),
+      warn: (...a) => console.warn('[listen]', ...a),
+      error: (...a) => console.error('[listen]', ...a),
+    },
+  });
+
+  console.info('[listen] Starting Horizon event listener...');
+  console.info(`[listen]   contracts:      ${contractIds.join(', ')}`);
+  console.info(`[listen]   rpc-url:        ${rpcUrl}`);
+  console.info(`[listen]   webhook-url:    ${webhookUrl}`);
+  console.info(`[listen]   poll-interval:  ${pollIntervalMs}ms`);
+  console.info(`[listen]   max-retries:    ${maxRetries}`);
+  if (startLedger !== undefined) {
+    console.info(`[listen]   start-ledger:   ${startLedger}`);
+  }
+  console.info('[listen] Press Ctrl+C to stop.\n');
+
+  // Graceful shutdown on SIGINT / SIGTERM
+  process.on('SIGINT', () => {
+    console.info('\n[listen] Received SIGINT — stopping listener...');
+    listener.stop();
+  });
+  process.on('SIGTERM', () => {
+    console.info('[listen] Received SIGTERM — stopping listener...');
+    listener.stop();
+  });
+
+  await listener.start();
+  console.info('[listen] Listener stopped.');
+}
+
+// ---------------------------------------------------------------------------
+// Argument parsing helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a flat argv array into a key→value map.
+ * Boolean flags (no following value, or value starts with --) are stored as `true`.
+ *
+ * @param {string[]} argv
+ * @returns {Record<string, string | true>}
+ */
+function parseFlags(argv) {
+  /** @type {Record<string, string | true>} */
+  const out = {};
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (!arg.startsWith('--')) continue;
+    const key = arg.slice(2);
+    const next = argv[i + 1];
+    if (next !== undefined && !next.startsWith('--')) {
+      out[key] = next;
+      i++;
+    } else {
+      out[key] = true;
+    }
+  }
+  return out;
+}
+
+/**
+ * Collect all values for a flag that may appear multiple times.
+ * e.g. `--contract-id A --contract-id B` → ['A', 'B']
+ *
+ * @param {string[]} argv
+ * @param {string} flag  e.g. '--contract-id'
+ * @returns {string[]}
+ */
+function collectRepeatedFlag(argv, flag) {
+  const values = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === flag && argv[i + 1] && !argv[i + 1].startsWith('--')) {
+      values.push(argv[i + 1]);
+      i++;
+    }
+  }
+  return values;
 }

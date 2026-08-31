@@ -12,8 +12,6 @@
     "sep10-auth",
     "sanctions-oracle",
     "horizon-listener",
-    "e2e-tests",
-    "examples/sep10-sanctions-gate",
     "examples/full-stack-demo"
   ],
   "engines": {
