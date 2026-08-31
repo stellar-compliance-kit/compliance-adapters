@@ -1,5 +1,5 @@
 import { Keypair, Networks, Transaction } from '@stellar/stellar-sdk';
-import { generateChallenge } from '../src/challenge';
+import { generateChallenge, InvalidClientAddressError } from '../src/challenge';
 
 describe('generateChallenge', () => {
   const homeDomain = 'localhost:3000';
@@ -35,5 +35,133 @@ describe('generateChallenge', () => {
 
     expect(challenge.networkPassphrase).toBe(Networks.TESTNET);
     expect(challenge.transactionXDR.length).toBeGreaterThan(0);
+  });
+
+  it('round-trips a custom memo into the built challenge transaction', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+    const memo = '123456789';
+
+    const challenge = generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+      homeDomain,
+      webAuthDomain: homeDomain,
+      networkPassphrase: Networks.TESTNET,
+      memo,
+    });
+
+    const tx = new Transaction(challenge.transactionXDR, Networks.TESTNET);
+
+    expect(tx.memo.type).toBe('id');
+    expect(tx.memo.value).toBe(memo);
+  });
+
+  it('omits the memo from the built transaction when not provided', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+
+    const challenge = generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+      homeDomain,
+      webAuthDomain: homeDomain,
+      networkPassphrase: Networks.TESTNET,
+    });
+
+    const tx = new Transaction(challenge.transactionXDR, Networks.TESTNET);
+
+    expect(tx.memo.type).toBe('none');
+    expect(tx.memo.value).toBeNull();
+  });
+
+  it('throws InvalidClientAddressError when clientAddress is not a valid Stellar Ed25519 public key', () => {
+    const serverKeypair = Keypair.random();
+    const invalidAddress = 'invalid-address';
+
+    expect(() => generateChallenge(invalidAddress, serverKeypair)).toThrow(
+      InvalidClientAddressError,
+    );
+  });
+
+  it('warns when using default homeDomain in production environment (issue #303)', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+    const mockLogger = { warn: jest.fn(), debug: jest.fn(), info: jest.fn() };
+
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    try {
+      generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+        networkPassphrase: Networks.TESTNET,
+        logger: mockLogger as any,
+      });
+
+      expect(mockLogger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('default homeDomain'),
+        expect.anything(),
+      );
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('does not warn when an explicit homeDomain is provided', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+    const mockLogger = { warn: jest.fn(), debug: jest.fn(), info: jest.fn() };
+
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'production';
+
+    try {
+      generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+        homeDomain: 'example.com',
+        webAuthDomain: 'example.com',
+        networkPassphrase: Networks.TESTNET,
+        logger: mockLogger as any,
+      });
+
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('does not warn in development environment even with default homeDomain', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+    const mockLogger = { warn: jest.fn(), debug: jest.fn(), info: jest.fn() };
+
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'development';
+
+    try {
+      generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+        networkPassphrase: Networks.TESTNET,
+        logger: mockLogger as any,
+      });
+
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
+  });
+
+  it('does not warn in test environment even with default homeDomain', () => {
+    const serverKeypair = Keypair.random();
+    const clientKeypair = Keypair.random();
+    const mockLogger = { warn: jest.fn(), debug: jest.fn(), info: jest.fn() };
+
+    const originalNodeEnv = process.env.NODE_ENV;
+    process.env.NODE_ENV = 'test';
+
+    try {
+      generateChallenge(clientKeypair.publicKey(), serverKeypair, {
+        networkPassphrase: Networks.TESTNET,
+        logger: mockLogger as any,
+      });
+
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    } finally {
+      process.env.NODE_ENV = originalNodeEnv;
+    }
   });
 });

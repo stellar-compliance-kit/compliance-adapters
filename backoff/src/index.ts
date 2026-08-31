@@ -1,3 +1,8 @@
+/**
+ * Copyright (c) 2026 stellar-compliance-kit
+ * SPDX-License-Identifier: MIT
+ */
+
 export interface BackoffOptions {
   baseMs?: number;
   maxMs?: number;
@@ -6,8 +11,8 @@ export interface BackoffOptions {
 }
 
 // randomFn is injectable (defaulting to Math.random) so tests can assert an
-// exact delay instead of a range, and so the listener can disable jitter
-// entirely for deterministic reconnect-timing assertions.
+// exact delay instead of a range, and so callers can disable jitter entirely
+// for deterministic timing assertions.
 export function computeBackoffDelayMs(attempt: number, options: BackoffOptions = {}): number {
   const baseMs = options.baseMs ?? 500;
   const maxMs = options.maxMs ?? 30000;
