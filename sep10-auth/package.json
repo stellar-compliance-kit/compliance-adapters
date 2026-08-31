@@ -42,6 +42,6 @@
     "@babel/preset-env": "^7.25.4",
     "fast-check": "4.9.0",
     "supertest": "^7.0.0",
-    "@types/supertest": "^6.0.2"
+    "@types/supertest": "^7.2.1"
   }
 }
