@@ -45,6 +45,28 @@ export function createSep10Middleware(options: Sep10MiddlewareOptions): RequestH
   const logger = options.logger ?? noopLogger;
   const maxTokenLength = options.maxTokenLength ?? DEFAULT_MAX_TOKEN_LENGTH;
 
+  // Validate required configuration at construction time to catch
+  // misconfiguration early rather than on first request.
+  if (!StrKey.isValidEd25519PublicKey(options.serverAccountId)) {
+    throw new Error(
+      `sep10-auth: Invalid serverAccountId: ${options.serverAccountId}`,
+    );
+  }
+
+  const homeDomains = Array.isArray(options.homeDomains)
+    ? options.homeDomains
+    : [options.homeDomains];
+  if (homeDomains.length === 0 || homeDomains.some((d) => !d)) {
+    throw new Error('sep10-auth: homeDomains must be a non-empty array of non-empty strings');
+  }
+
+  const webAuthDomains = Array.isArray(options.webAuthDomain)
+    ? options.webAuthDomain
+    : [options.webAuthDomain];
+  if (webAuthDomains.length === 0 || webAuthDomains.some((d) => !d)) {
+    throw new Error('sep10-auth: webAuthDomain must be a non-empty array of non-empty strings');
+  }
+
   return async (req, res, next) => {
     const authHeader = req.header('Authorization') ?? '';
     const [scheme, token] = authHeader.split(' ');
