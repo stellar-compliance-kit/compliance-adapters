@@ -10,6 +10,13 @@ export interface VerifyChallengeOptions {
   networkPassphrase?: string;
   homeDomains: string | string[];
   webAuthDomain: string | string[];
+  /**
+   * Optional expected memo for the signed challenge transaction. If set,
+   * verification will fail if the transaction's memo does not match.
+   * Useful for replay protection (e.g., tying a challenge to a specific
+   * session or request ID).
+   */
+  expectedMemo?: string;
 }
 
 /**
@@ -72,6 +79,15 @@ export function verifyChallenge(
         options.homeDomains,
         webAuthDomain,
       );
+
+      if (options.expectedMemo !== undefined) {
+        const txMemo = tx.memo.value?.toString() ?? '';
+        if (txMemo !== options.expectedMemo) {
+          throw new Error(
+            `sep10-auth: memo mismatch, expected "${options.expectedMemo}" but got "${txMemo}"`,
+          );
+        }
+      }
 
       const clientDomainOp = tx.operations.find(
         (op): op is Operation.ManageData => op.type === 'manageData' && op.name === 'client_domain',

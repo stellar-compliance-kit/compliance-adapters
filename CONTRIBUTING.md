@@ -63,6 +63,23 @@ Changesets document updates to packages for the release changelog. Follow this p
 
 To create a changeset for your PR, run `npm run changeset` and follow the prompts. Include a clear summary of the change and which packages it affects.
 
+## Handling npm audit advisories
+
+The CI workflow runs `npm audit --audit-level=high` to catch high-severity dependency vulnerabilities. In rare cases, a high-severity advisory may exist in a transitive dependency with no available fix, and the team may assess it as not applicable or acceptable given the dependency's usage context.
+
+**Process for allow-listing an advisory:**
+
+1. **Do not disable the check.** Loosening or disabling the audit check silently loses protection for every other advisory.
+2. **Create an issue to track the advisory** including:
+   - The advisory ID (from `npm audit` output)
+   - The affected package and version
+   - Why the team assesses the risk as acceptable (e.g., the vulnerable code path is not reachable given how the package is used)
+   - A target expiry date (e.g., "revisit Q4 2026 when [upstream fix] is expected")
+3. **Document the exemption** by adding the advisory ID to `.npmrc` or a similar audit-ignore config file with a comment linking to the tracking issue.
+4. **Monitor for updates.** Check periodically (at least quarterly) whether the upstream fix is now available, and remove the exemption as soon as it is.
+
+This preserves the audit check as a meaningful signal for new advisories while acknowledging that not every advisory can or should be fixed immediately.
+
 ## Branch protection (recommended)
 
 The repository intends to enforce the following branch protection rules on `main` to ensure
