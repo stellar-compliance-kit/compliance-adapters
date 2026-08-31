@@ -18,6 +18,21 @@ export interface HorizonListenerOptions {
   onEvent: (event: RawContractEvent) => Promise<void> | void;
   onEventFailure?: (event: RawContractEvent, error: unknown) => void | Promise<void>;
   pollIntervalMs?: number;
+  /**
+   * Maximum number of consecutive polling failures before giving up.
+   * When a poll fails, a counter increments; it resets to 0 on success.
+   * Once `attempts >= maxRetries`, the listener throws with an error.
+   *
+   * @default 10
+   *
+   * **Important:** `maxRetries: 0` means "fail immediately on the first error"
+   * (since 1 >= 0), not "disable the retry limit" or "retry infinitely".
+   * To disable the retry ceiling entirely, use `maxRetries: Infinity`.
+   *
+   * Example: with `maxRetries: 3`, the listener allows up to 3 consecutive
+   * failed polls (attempts 1, 2, 3) before throwing; the error message
+   * will say "giving up after 3 consecutive failed polls".
+   */
   maxRetries?: number;
   logger?: Logger;
   // Injectable so tests can drive time with Jest fake timers instead of waiting
