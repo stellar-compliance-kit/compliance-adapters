@@ -4,6 +4,12 @@ A minimal, runnable Express app showing the full SEP-10 challenge/verify
 roundtrip using this package: `generateChallenge` on a `/challenge` route,
 and `createSep10Middleware` protecting a `/protected` route.
 
+The app is built by `createApp()` in [`app.ts`](./app.ts) (app construction is
+kept separate from `server.ts`'s `listen()` call so the routes can be tested
+with supertest without binding a port). See
+[`sep10-auth/test/express-app.example.test.ts`](../../test/express-app.example.test.ts)
+for the roundtrip test that keeps this example honest.
+
 ## Run it
 
 From the `sep10-auth` package directory:

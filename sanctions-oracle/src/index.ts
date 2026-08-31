@@ -21,6 +21,7 @@ export {
   CliArgs,
   toSafeLogString,
 } from './sync';
+export { SyncCheckpointStore, InMemoryCheckpointStore } from './checkpoint';
 export { withRetry, RetryOptions } from './retry';
 export {
   ProviderRegistry,
