@@ -16,6 +16,7 @@ export {
   AuditLogger,
   SyncOptions,
   SyncResult,
+  FailedAddress,
   RpcDenylistWriterOptions,
   CliArgs,
   toSafeLogString,

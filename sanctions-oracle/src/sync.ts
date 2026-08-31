@@ -185,6 +185,16 @@ export interface SyncOptions {
 }
 
 /**
+ * A single address whose provider check failed on every retry attempt,
+ * paired with the message from the last error that caused it to fail.
+ */
+export interface FailedAddress {
+  address: string;
+  /** Message of the final error thrown by `provider.checkAddress` (after retries). */
+  error: string;
+}
+
+/**
  * Result of a sanctions sync operation.
  */
 export interface SyncResult {
@@ -194,8 +204,20 @@ export interface SyncResult {
   flagged: string[];
   /** Addresses successfully written to the denylist (empty if dryRun is true). */
   written: string[];
-  /** Addresses whose provider check failed on every retry attempt. */
+  /**
+   * Addresses whose provider check failed on every retry attempt.
+   *
+   * This is kept as a bare `string[]` for backward compatibility; use
+   * {@link SyncResult.failedWithReasons} when you need the error message that
+   * caused each failure (e.g. to distinguish rate-limit failures from genuine
+   * provider errors programmatically).
+   */
   failed: string[];
+  /**
+   * Same failures as {@link SyncResult.failed}, each paired with the message
+   * of the final error that caused it. Order matches `failed`.
+   */
+  failedWithReasons: FailedAddress[];
   /** Whether this was a dry-run (read-only) operation. */
   dryRun: boolean;
 }
@@ -257,6 +279,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   const flagged: string[] = [];
   const flaggedWithSource: FlaggedAddressWithSource[] = [];
   const failed: string[] = [];
+  const failedWithReasons: FailedAddress[] = [];
   let checked = 0;
 
   await executeConcurrent(
@@ -287,6 +310,10 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         metrics.histogram.observe('address_check', durationMs);
         span.end('error', err instanceof Error ? err : new Error(String(err)));
         failed.push(address);
+        failedWithReasons.push({
+          address,
+          error: err instanceof Error ? err.message : String(err),
+        });
       } finally {
         checked += 1;
         if (checked % progressInterval === 0) {
@@ -358,6 +385,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     flagged,
     written,
     failed,
+    failedWithReasons,
     dryRun,
   };
 }

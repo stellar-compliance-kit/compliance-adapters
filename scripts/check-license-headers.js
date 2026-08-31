@@ -7,14 +7,11 @@ const fs = require('fs');
 const path = require('path');
 
 const TARGET_DIRS = [
+  'logger/src',
+  'tracing-types/src',
   'sep10-auth/src',
   'sanctions-oracle/src',
   'horizon-listener/src',
-  'logger/src',
-  'bin',
-  'scripts',
-  'examples/sep10-sanctions-gate/src',
-  'examples/full-stack-demo',
 ];
 
 const REQUIRED_HEADER_PATTERNS = [
