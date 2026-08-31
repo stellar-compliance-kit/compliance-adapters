@@ -20,8 +20,10 @@ by invoking its `add_to_denylist(address)` contract function.
 
 - Defines a generic `SanctionsProvider` interface so any external
   sanctions/watchlist data source can be plugged into the sync flow.
-- Ships one reference implementation, `MockSanctionsProvider`, backed by a
-  small static in-file list — for local development and tests only.
+- Ships two reference implementations for local development and tests only:
+  `MockSanctionsProvider`, backed by a small static in-file list, and
+  `CsvSanctionsProvider`, which loads flagged addresses from a CSV file
+  (see [Loading a watchlist from CSV](#loading-a-watchlist-from-csv-csvsanctionsprovider)).
 - Provides `syncSanctionsToDenylist`, a function that checks a list of
   candidate addresses against a `SanctionsProvider` and, for any flagged
   addresses, calls `add_to_denylist(address)` on a Soroban `denylist-gate`
@@ -39,6 +41,31 @@ they retry with exponential backoff up to a configurable number of
 attempts (`SyncOptions.retry`, default 3 attempts). If an address's
 provider check still fails after exhausting all attempts, that address is
 recorded in `SyncResult.failed` instead of aborting the whole sync run.
+`SyncResult.failedWithReasons` carries the same addresses paired with the
+message of the error that caused each one to fail, so callers can react to
+specific failure types programmatically without parsing log output.
+
+### Input validation
+
+Every input address is checked with `StrKey.isValidEd25519PublicKey()`
+**before** it reaches the provider. Entries that are not well-formed Stellar
+`G...` public keys (a typo, a truncated paste, a non-Stellar identifier) are
+never checked or written — they are reported in `SyncResult.invalid`, kept
+distinct from `SyncResult.failed` (which means "the provider couldn't
+determine an answer").
+
+### Resuming an interrupted sync
+
+Pass a `SyncOptions.checkpoint` store (interface `SyncCheckpointStore`, with
+an in-memory reference implementation `InMemoryCheckpointStore` — same
+"bring your own persistence" pattern as sep10-auth's `RevocationStore`) and
+the sync records each address as it finishes: clean addresses right after
+the provider check, flagged addresses only once their denylist write
+succeeds. On a later run with `resume: true`, any address the checkpoint
+already reports as complete is skipped (reported in `SyncResult.skipped`)
+instead of being re-checked and re-written — so a large sync that crashed
+after writing 500 of 2000 addresses picks up from 501 rather than paying
+the fees to re-write the first 500.
 
 ## The `SanctionsProvider` interface
 
@@ -66,6 +93,21 @@ class MyProvider implements SanctionsProvider {
 Anything conforming to this interface — a REST client, a cache in front of
 multiple upstream lists, a local CSV loader — can be passed to
 `syncSanctionsToDenylist` in place of `MockSanctionsProvider`.
+
+## Cache and concurrency behavior
+
+`syncSanctionsToDenylist` supports both an optional `cache` (`ProviderResultCache`)
+and a `concurrency` limit. When the same address is checked concurrently, the
+implementation coalesces duplicate in-flight lookups so only one underlying
+`provider.checkAddress(address)` call is issued for that address until the result
+is cached or fails. This means a shared cache and a bounded concurrency limit work
+well together, and the same address is still treated as a single logical check in
+`SyncResult.checked` even if several tasks race.
+
+This is intentionally documented behavior rather than relying on the input array
+being de-duplicated in advance; the per-address check is now safe even if a caller
+passes the same address multiple times or two tasks reach the same cache miss at
+once.
 
 ## Running multiple providers with `ProviderRegistry`
 
@@ -265,6 +307,9 @@ The CLI submits one `add_to_denylist(address)` transaction per flagged address a
   "checked": 2,
   "flagged": ["GABC..."],
   "written": ["GABC..."],
+  "failed": [],
+  "invalid": [],
+  "skipped": [],
   "dryRun": false
 }
 ```

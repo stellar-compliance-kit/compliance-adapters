@@ -71,6 +71,10 @@ export interface RpcEventSourceOptions {
   // call; callers should pass a recent ledger they know is within the RPC's
   // retention window. Left undefined, the RPC call will surface its own error.
   startLedger?: number;
+  // Optional timeout in milliseconds for the RPC getEvents call.
+  // If the call takes longer than this, it will be rejected.
+  // Left undefined, no timeout is applied (relies on SDK's default).
+  timeoutMs?: number;
 }
 
 // Real Soroban RPC request/response shapes vary slightly by SDK minor version and
@@ -115,7 +119,17 @@ export class RpcEventSource implements EventSource {
           }
     ) as GetEventsRequest;
 
-    const response: GetEventsResponse = await server.getEvents(request);
+    const getEventsPromise = server.getEvents(request);
+
+    const response: GetEventsResponse = this.options.timeoutMs
+      ? await Promise.race([
+          getEventsPromise,
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`RPC getEvents timeout after ${this.options.timeoutMs}ms`)), this.options.timeoutMs)
+          ),
+        ])
+      : await getEventsPromise;
+
     const rawEvents = (response as unknown as { events?: unknown[] }).events ?? [];
 
     const events: RawContractEvent[] = rawEvents.map((rawEvent) => {

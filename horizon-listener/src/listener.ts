@@ -4,7 +4,7 @@
  */
 
 import type { EventSource, RawContractEvent } from './eventSource';
-import { computeBackoffDelayMs, type BackoffOptions } from './backoff';
+import { computeBackoffDelayMs, type BackoffOptions } from '@compliance-adapters/backoff';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { type AnyTracer, NoopTracer } from './tracing';
 import { type Logger, consoleLogger } from '@compliance-adapters/logger';
@@ -252,5 +252,23 @@ export class HorizonListener {
   stop(): void {
     this.running = false;
     this.sleepAbortController?.abort();
+  }
+
+  /**
+   * Returns a snapshot of the listener's current health/progress state, for
+   * use in liveness/readiness probes or status dashboards.
+   */
+  getStatus(): {
+    running: boolean;
+    cursor: string | undefined;
+    consecutiveFailures: number;
+    backfilling: boolean;
+  } {
+    return {
+      running: this.running,
+      cursor: this.cursor,
+      consecutiveFailures: this.attempt,
+      backfilling: this.backfilling,
+    };
   }
 }

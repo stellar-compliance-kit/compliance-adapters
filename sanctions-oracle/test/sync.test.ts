@@ -36,6 +36,9 @@ function makeAlwaysFailingProvider(): SanctionsProvider {
 
 function makeFakeLogger(): Logger & { log: jest.Mock; error: jest.Mock } {
   return {
+    debug: jest.fn(),
+    info: jest.fn(),
+    warn: jest.fn(),
     log: jest.fn(),
     error: jest.fn(),
   };
@@ -328,6 +331,40 @@ describe('syncSanctionsToDenylist', () => {
     });
 
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+
+  it('deduplicates concurrent cache lookups for the same address across parallel syncs', async () => {
+    const cache = new ProviderResultCache();
+    const checkAddressSpy = jest.fn(async (address: string) => {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      return { flagged: address === FLAGGED_ADDRESS, source: 'test' };
+    });
+    const provider: SanctionsProvider = {
+      checkAddress: checkAddressSpy,
+    };
+    const writer = makeFakeWriter();
+
+    await Promise.all([
+      syncSanctionsToDenylist({
+        provider,
+        addresses: [FLAGGED_ADDRESS],
+        writer,
+        cache,
+        concurrency: 2,
+        dryRun: true,
+      }),
+      syncSanctionsToDenylist({
+        provider,
+        addresses: [FLAGGED_ADDRESS],
+        writer,
+        cache,
+        concurrency: 2,
+        dryRun: true,
+      }),
+    ]);
+
+    expect(checkAddressSpy).toHaveBeenCalledTimes(1);
+    expect(cache.get(FLAGGED_ADDRESS)).toEqual({ flagged: true, source: 'test' });
   });
 
   it('issue #60: emits progress logs at specified intervals', async () => {
@@ -908,6 +945,36 @@ describe('runCli', () => {
     process.exitCode = originalExit;
     console.error = originalConsoleError;
     console.log = originalConsoleLog;
+  });
+
+  describe('addresses file validation', () => {
+    it('rejects addresses file with empty string entries', async () => {
+      const addressesFile = '/tmp/test-addresses-empty.json';
+      const addresses = ['GTEST1AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', '', 'GTEST2AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'];
+      fs.writeFileSync(addressesFile, JSON.stringify(addresses));
+
+      await runCli(['--addresses', addressesFile, '--dry-run']);
+
+      expect(process.exitCode).toBe(1);
+      const output = consoleErrors.join('\n');
+      expect(output).toContain('empty string');
+
+      fs.unlinkSync(addressesFile);
+    });
+
+    it('logs when addresses file contains duplicate entries', async () => {
+      const addressesFile = '/tmp/test-addresses-dups.json';
+      const addresses = [FLAGGED_ADDRESS, CLEAN_ADDRESS, FLAGGED_ADDRESS, CLEAN_ADDRESS];
+      fs.writeFileSync(addressesFile, JSON.stringify(addresses));
+
+      await runCli(['--addresses', addressesFile, '--dry-run']);
+
+      const output = consoleLogs.join('\n');
+      expect(output).toContain('deduplicating');
+      expect(output).toContain('2');
+
+      fs.unlinkSync(addressesFile);
+    });
   });
 
   it('shows help when --help flag is passed', async () => {

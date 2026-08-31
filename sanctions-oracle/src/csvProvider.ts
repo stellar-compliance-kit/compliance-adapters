@@ -78,9 +78,9 @@ export class CsvSanctionsProvider implements SanctionsProvider {
   }
 
   async checkAddress(address: string): Promise<{ flagged: boolean; source: string }> {
-    const source = this.flaggedAddresses.get(address);
-    if (source) {
-      return { flagged: true, source };
+    const sources = this.flaggedAddresses.get(address);
+    if (sources && sources.length > 0) {
+      return { flagged: true, source: sources.join(',') };
     }
     return { flagged: false, source: CSV_SOURCE };
   }
