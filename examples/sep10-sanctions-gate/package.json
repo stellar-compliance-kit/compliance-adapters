@@ -14,7 +14,7 @@
     "test": "jest"
   },
   "dependencies": {
-    "express": "^4.19.0",
+    "express": "^5.2.1",
     "sep10-auth": "*",
     "sanctions-oracle": "*"
   },
