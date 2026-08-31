@@ -29,7 +29,7 @@
     "ts-jest": "^29.2.4",
     "@types/jest": "^29.5.12",
     "@types/node": "^20.14.0",
-    "babel-jest": "^29.7.0",
+    "babel-jest": "^30.5.0",
     "@babel/core": "^7.25.2",
     "@babel/preset-env": "^7.25.4",
     "fast-check": "4.9.0"
