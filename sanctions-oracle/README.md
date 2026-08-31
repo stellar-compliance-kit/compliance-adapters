@@ -20,8 +20,10 @@ by invoking its `add_to_denylist(address)` contract function.
 
 - Defines a generic `SanctionsProvider` interface so any external
   sanctions/watchlist data source can be plugged into the sync flow.
-- Ships one reference implementation, `MockSanctionsProvider`, backed by a
-  small static in-file list — for local development and tests only.
+- Ships two reference implementations for local development and tests only:
+  `MockSanctionsProvider`, backed by a small static in-file list, and
+  `CsvSanctionsProvider`, which loads flagged addresses from a CSV file
+  (see [Loading a watchlist from CSV](#loading-a-watchlist-from-csv-csvsanctionsprovider)).
 - Provides `syncSanctionsToDenylist`, a function that checks a list of
   candidate addresses against a `SanctionsProvider` and, for any flagged
   addresses, calls `add_to_denylist(address)` on a Soroban `denylist-gate`
@@ -91,6 +93,63 @@ class MyProvider implements SanctionsProvider {
 Anything conforming to this interface — a REST client, a cache in front of
 multiple upstream lists, a local CSV loader — can be passed to
 `syncSanctionsToDenylist` in place of `MockSanctionsProvider`.
+
+## Loading a watchlist from CSV (`CsvSanctionsProvider`)
+
+`CsvSanctionsProvider` reads a flat CSV file of flagged addresses and
+implements `SanctionsProvider`, so it can be passed anywhere a provider is
+expected (including into `ProviderRegistry` or `syncSanctionsToDenylist`).
+
+> Like `MockSanctionsProvider`, this is a development/testing helper — it
+> ships with **no real sanctions data**. Point it at your own file.
+
+```ts
+import { CsvSanctionsProvider } from 'sanctions-oracle';
+
+const provider = new CsvSanctionsProvider('./watchlist.csv');
+const { flagged, source } = await provider.checkAddress('GABC...');
+```
+
+### File format
+
+- The **first row is treated as a header** and skipped.
+- **Column 1** is the Stellar address (`G...`, ed25519 public key).
+- **Column 2** (optional) is a free-text source/attribution string. When it
+  is missing or blank, the source defaults to `csv-watchlist-v1`.
+- Blank lines are ignored.
+- Leading/trailing whitespace around the address and source is trimmed.
+
+Parsing is **RFC 4180-aware** (dependency-free): fields may be wrapped in
+double quotes, and a quoted field may itself contain commas, embedded line
+breaks, or escaped quotes (`""`). This means a real-world source column
+such as `"OFAC, SDN List"` is read as a single value rather than being
+mis-split into extra columns. `\n`, `\r\n`, and bare `\r` line endings are
+all accepted, as is a leading UTF-8 BOM.
+
+```csv
+address,source
+GD7PQQDZ75ZIY3O3CZKO4P6NBRBDBYEM6PKROQUVKMXI6J2SAB4FWYAN,"OFAC, SDN List"
+GCSNJ6SE42RKXVFLWHFWRZKAWOVSTVVTZ2HBM2JV45NY3GGMB6PJBMXX,EU-Sanctions
+```
+
+### Error handling
+
+The loader never throws. A missing file, an unreadable file, or a row
+whose address column is not a valid `G...` address produces a
+`console.warn` and is skipped; every other address still loads. If the
+file cannot be read at all, no addresses are flagged.
+
+### Duplicate addresses
+
+If the same address appears on **more than one row with different source
+values**, the sources are **aggregated** rather than the last row silently
+overwriting the earlier ones — `checkAddress` returns them joined with
+commas (e.g. `"OFAC-SDN,EU-Sanctions"`), and a `console.warn` records that
+the aggregation happened. An exact duplicate (same address *and* same
+source) is ignored with a warning. This preserves every source attribution
+for the audit trail; if you need them as a list rather than a joined
+string, split the returned `source` on `,` (note that an individual source
+value could itself contain a comma if it was quoted in the CSV).
 
 ## Running multiple providers with `ProviderRegistry`
 
