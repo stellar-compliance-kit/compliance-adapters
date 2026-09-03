@@ -28,7 +28,7 @@
     "@types/jest": "^29.5.12",
     "@types/node": "^20.14.0",
     "@types/supertest": "^6.0.2",
-    "babel-jest": "^29.7.0",
+    "babel-jest": "^30.5.0",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-jest": "^28.8.3",
