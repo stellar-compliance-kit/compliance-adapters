@@ -165,7 +165,10 @@ export class HorizonListener {
           );
         }
 
-        const delayMs = computeBackoffDelayMs(this.attempt, this.backoffOptions);
+        // computeBackoffDelayMs is zero-indexed (attempt 0 -> baseMs), but
+        // this.attempt was already incremented for the current failure above,
+        // so pass the zero-based index to keep the first retry at baseMs.
+        const delayMs = computeBackoffDelayMs(this.attempt - 1, this.backoffOptions);
         this.sleepAbortController = new AbortController();
         try {
           await this.sleep(delayMs, this.sleepAbortController.signal);
