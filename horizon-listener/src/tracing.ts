@@ -22,14 +22,7 @@
 // The span data model and trace context are shared with sanctions-oracle via
 // the runtime-free @compliance-adapters/tracing-types package so a context
 // produced by either package's tracer can be passed to the other's startSpan().
-import type {
-  SpanStatus,
-  SpanAttributes,
-  SpanData,
-  TracingContext,
-} from '@compliance-adapters/tracing-types';
-
-export type { SpanStatus, SpanAttributes, SpanData, TracingContext };
+import type { SpanStatus, TracingContext } from '@compliance-adapters/tracing-types';
 
 // ── Live span handle ──────────────────────────────────────────────────────────
 
