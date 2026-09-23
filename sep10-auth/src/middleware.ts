@@ -4,6 +4,7 @@
  */
 
 import { RequestHandler } from 'express';
+import { StrKey } from '@stellar/stellar-sdk';
 import { type Logger, noopLogger } from '@compliance-adapters/logger';
 import { verifyChallenge, VerifyChallengeOptions } from './verify';
 import { RevocationStore } from './revocation';
