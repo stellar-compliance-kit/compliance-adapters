@@ -13,7 +13,10 @@
     "sanctions-oracle",
     "horizon-listener",
     "examples/full-stack-demo",
-    "e2e-tests"
+    "e2e-tests",
+    "backoff",
+    "metrics",
+    "tracing"
   ],
   "engines": {
     "node": ">=20.0.0",
