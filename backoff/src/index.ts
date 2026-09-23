@@ -14,6 +14,12 @@ export interface BackoffOptions {
 // exact delay instead of a range, and so callers can disable jitter entirely
 // for deterministic timing assertions.
 export function computeBackoffDelayMs(attempt: number, options: BackoffOptions = {}): number {
+  if (!Number.isFinite(attempt) || attempt < 0) {
+    throw new RangeError(
+      `computeBackoffDelayMs: attempt must be a non-negative finite number, received ${attempt}`,
+    );
+  }
+
   const baseMs = options.baseMs ?? 500;
   const maxMs = options.maxMs ?? 30000;
   const jitter = options.jitter ?? true;
