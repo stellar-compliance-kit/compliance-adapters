@@ -3,11 +3,16 @@
  * SPDX-License-Identifier: MIT
  */
 
+export type JitterStrategy = 'half' | 'full' | 'none';
+
 export interface BackoffOptions {
   baseMs?: number;
   maxMs?: number;
   jitter?: boolean;
   randomFn?: () => number;
+  jitterStrategy?: JitterStrategy;
+  jitterMin?: number;
+  jitterMax?: number;
 }
 
 // randomFn is injectable (defaulting to Math.random) so tests can assert an
@@ -22,10 +27,15 @@ export function computeBackoffDelayMs(attempt: number, options: BackoffOptions =
   const uncapped = baseMs * 2 ** attempt;
   const capped = Math.min(maxMs, uncapped);
 
-  if (!jitter) {
+  if (!jitter || options.jitterStrategy === 'none') {
     return capped;
   }
 
-  const jitterFactor = 0.5 + randomFn() * 0.5;
+  const defaultMin = options.jitterStrategy === 'full' ? 0 : 0.5;
+  const defaultMax = 1;
+  const min = options.jitterMin ?? defaultMin;
+  const max = options.jitterMax ?? defaultMax;
+
+  const jitterFactor = min + randomFn() * (max - min);
   return capped * jitterFactor;
 }
