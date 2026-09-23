@@ -12,7 +12,8 @@
     "sep10-auth",
     "sanctions-oracle",
     "horizon-listener",
-    "examples/full-stack-demo"
+    "examples/full-stack-demo",
+    "e2e-tests"
   ],
   "engines": {
     "node": ">=20.0.0",
