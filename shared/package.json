@@ -12,7 +12,7 @@
     "test": "jest"
   },
   "devDependencies": {
-    "@types/node": "^20.14.0",
+    "@types/node": "^26.6.2",
     "typescript": "^5.5.4"
   },
   "license": "MIT"
