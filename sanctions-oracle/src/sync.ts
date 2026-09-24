@@ -541,7 +541,7 @@ interface RpcDenylistWriterOptions {
    * Optional logger used to record an audit-logging failure without failing
    * the write it accompanies. Defaults to a no-op logger.
    */
-  logger?: StructuredLogger;
+  logger?: Logger;
 }
 
 // Kept behind the DenylistWriter interface (rather than called directly
