@@ -29,6 +29,15 @@ export class InvalidDomainError extends Error {
   }
 }
 
+export class ServerKeypairCannotSignError extends Error {
+  constructor() {
+    super(
+      'sep10-auth: serverKeypair cannot sign — provide a keypair with a secret key, not a public-key-only keypair',
+    );
+    this.name = 'ServerKeypairCannotSignError';
+  }
+}
+
 const MAX_UINT64 = 2n ** 64n - 1n;
 
 /**
@@ -104,6 +113,7 @@ export function generateChallenge(
     logger.warn(
       `sep10-auth: generateChallenge is using the default homeDomain "${DEFAULT_HOME_DOMAIN}" ` +
         'in a production environment. Pass an explicit `homeDomain` option matching your deployed domain.',
+      { homeDomain: DEFAULT_HOME_DOMAIN },
     );
   }
   assertBareDomain('homeDomain', homeDomain);
