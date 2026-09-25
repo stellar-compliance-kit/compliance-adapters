@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Keypair, Networks, StrKey, WebAuth } from '@stellar/stellar-sdk';
+import { Keypair, Networks, WebAuth } from '@stellar/stellar-sdk';
 import { type Logger, noopLogger } from '@compliance-adapters/logger';
+import { isValidStellarAddress } from '@compliance-adapters/shared';
 
 export class InvalidClientAddressError extends Error {
   constructor(address: string) {
@@ -92,7 +93,7 @@ export function generateChallenge(
     throw new ServerKeypairCannotSignError();
   }
 
-  if (!StrKey.isValidEd25519PublicKey(clientAddress)) {
+  if (!isValidStellarAddress(clientAddress)) {
     throw new InvalidClientAddressError(clientAddress);
   }
 
