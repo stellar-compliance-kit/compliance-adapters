@@ -3,8 +3,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { Networks, Operation, StrKey, WebAuth } from '@stellar/stellar-sdk';
+import { Networks, Operation, WebAuth } from '@stellar/stellar-sdk';
 import { assertBareDomain } from './challenge';
+import { isValidStellarAddress } from '@compliance-adapters/shared';
 
 export interface VerifyChallengeOptions {
   serverAccountId: string;
@@ -58,7 +59,7 @@ export function verifyChallenge(
   signedTransactionXDR: string,
   options: VerifyChallengeOptions,
 ): VerifyResult {
-  if (!StrKey.isValidEd25519PublicKey(options.serverAccountId)) {
+  if (!isValidStellarAddress(options.serverAccountId)) {
     return {
       valid: false,
       address: '',
