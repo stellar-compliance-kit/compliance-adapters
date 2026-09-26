@@ -122,10 +122,11 @@ a short-lived session token instead — that's out of scope for this package.
 
 ### `rateLimiter(options?)`
 
-An Express middleware factory that rate-limits incoming requests using a
-sliding-window in-memory counter. Useful for protecting the challenge
-generation endpoint (or any other endpoint) from being hammered by a single
-client.
+An Express middleware factory that rate-limits incoming requests with a
+sliding-window counter. Mount it on the challenge-generation route so one
+client cannot hammer challenge issuance. It composes with
+`createSep10Middleware` like any other Express middleware: place it earlier
+in the chain so the request is counted before SEP-10 verification runs.
 
 > **`trust proxy` required behind a reverse proxy or load balancer**: the
 > default key generator keys on `req.ip`, which only reflects the real
@@ -139,28 +140,54 @@ client.
 
 ```ts
 import express from 'express';
-import { rateLimiter } from 'sep10-auth';
+import { createSep10Middleware, rateLimiter } from 'sep10-auth';
 
 const app = express();
 
-app.use(
+// Mount ahead of challenge generation.
+app.post(
   '/api/challenge',
-  rateLimiter({ windowMs: 30_000, maxRequests: 10 })
+  rateLimiter({ windowMs: 30_000, maxRequests: 10 }),
+  (req, res) => {
+    // ... generate and return the challenge ...
+  }
 );
 
-app.post('/api/challenge', (req, res) => {
-  // ... generate and return the challenge ...
-});
+// The same helper can sit in front of createSep10Middleware.
+app.use(
+  '/compliance',
+  rateLimiter({ windowMs: 60_000, maxRequests: 100 }),
+  createSep10Middleware({
+    serverAccountId: serverKeypair.publicKey(),
+    homeDomains: 'example.com',
+    webAuthDomain: 'auth.example.com',
+  })
+);
 ```
 
 **Options:**
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `windowMs` | `60000` (1 minute) | The time window in milliseconds during which requests are counted. |
-| `maxRequests` | `100` | The maximum number of requests allowed within the window. |
-| `keyGenerator` | `(req) => req.ip` | A function returning a unique key for each client (defaults to the request IP). |
-| `store` | `InMemoryRateLimitStore` | A pluggable backend implementing `RateLimitStore` for local or distributed counters (e.g. Redis). |
+| `windowMs` | `60000` (1 minute) | Sliding window length in milliseconds. Must be a positive integer. |
+| `maxRequests` | `100` | Maximum requests allowed inside the window for one key. Must be a positive integer. |
+| `keyGenerator` | `req.ip`, then `req.socket.remoteAddress`, then `"unknown"` | Returns the counter key for a request. |
+| `store` | `InMemoryRateLimitStore` | A pluggable backend implementing `RateLimitStore` (`consume(key, now, windowMs, maxRequests)`) for local or distributed counters (e.g. Redis). |
+
+When the limit is exceeded the middleware responds with **429** and a JSON body:
+
+```json
+{ "error": "rate_limit_exceeded", "retryAfter": 15 }
+```
+
+`retryAfter` is the number of whole seconds until the oldest request in the
+window falls out (at least `1`). The `Retry-After` header is set to the same
+value.
+
+> **Note**: The default in-memory store is process-local and not shared across
+> instances, and its counters are lost on process restart. For multi-process
+> or multi-region deployments, supply a custom `store` implementation backed
+> by Redis or another shared datastore.
 
 ### `createSep10Middleware` Options
 
@@ -176,19 +203,6 @@ app.post('/api/challenge', (req, res) => {
 | `maxTokenLength` | `number` | `8192` | Maximum accepted length (in characters) of the bearer token, rejected with `401` (`"bearer token too large"`) before XDR parsing is attempted. Guards against unauthenticated callers forcing expensive XDR-parsing work with oversized input. |
 | `revocationStore` | `RevocationStore` | `undefined` | Optional store consulted after challenge verification to reject revoked addresses before `timeoutSeconds` expires. |
 | `logger` | `Logger` | `noopLogger` | Injectable logger (`debug`, `info`, `warn`, `error`) for auth and revocation observability. |
-
-When the limit is exceeded the middleware responds with **429** and a JSON body:
-
-```json
-{ "error": "rate_limit_exceeded", "retryAfter": 15 }
-```
-
-The `Retry-After` header is also set to the number of seconds the client should
-wait before retrying.
-
-> **Note**: The default in-memory store is process-local and not shared across
-> instances. For multi-process or multi-region deployments, supply a custom
-> `store` implementation backed by Redis or another shared datastore.
 
 Because there's no session token, a challenge can't be revoked before its
 `timeoutSeconds` elapses unless you supply a `revocationStore`. An in-memory
