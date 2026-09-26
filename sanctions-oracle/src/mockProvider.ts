@@ -69,7 +69,7 @@ export class MockSanctionsProvider implements SanctionsProvider {
   private static loadFlaggedAddressesSync(
     options?: MockSanctionsProviderOptions,
   ): Record<string, string> {
-    if (!options?.flaggedAddresses) {
+    if (options?.flaggedAddresses === undefined) {
       return MOCK_FLAGGED_ADDRESSES;
     }
 
@@ -93,7 +93,7 @@ export class MockSanctionsProvider implements SanctionsProvider {
   private static async loadFlaggedAddressesAsync(
     options?: MockSanctionsProviderOptions,
   ): Promise<Record<string, string>> {
-    if (!options?.flaggedAddresses) {
+    if (options?.flaggedAddresses === undefined) {
       return MOCK_FLAGGED_ADDRESSES;
     }
 

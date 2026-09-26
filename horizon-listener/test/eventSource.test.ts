@@ -233,6 +233,40 @@ describe('RpcEventSource', () => {
     }
   });
 
+  it('handles a late RPC rejection after the timeout without an unhandled rejection', async () => {
+    jest.useFakeTimers();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => unhandledRejections.push(reason);
+    process.on('unhandledRejection', onUnhandledRejection);
+    try {
+      const mockServer = {
+        getEvents: jest.fn(() => {
+          return new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('late RPC failure')), 5000);
+          });
+        }),
+      };
+      const source = new RpcEventSource({
+        rpcUrl: 'http://localhost:8000',
+        networkPassphrase: 'Test SDF Network ; September 2015',
+        contractIds: ['CTEST'],
+        timeoutMs: 1000,
+      });
+      source['server'] = mockServer as never;
+
+      const promise = source.getEvents(undefined);
+      jest.advanceTimersByTime(1000);
+      await expect(promise).rejects.toThrow('timeout');
+      jest.advanceTimersByTime(4000);
+      await Promise.resolve();
+
+      expect(unhandledRejections).toHaveLength(0);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+      jest.useRealTimers();
+    }
+  });
+
   it('allows requests to complete when they finish before timeout', async () => {
     jest.useFakeTimers();
     try {

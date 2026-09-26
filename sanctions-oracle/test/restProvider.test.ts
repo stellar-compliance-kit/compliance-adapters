@@ -127,7 +127,9 @@ describe('RestSanctionsProvider', () => {
       const fetchImpl = jest.fn().mockResolvedValue(makeResponse({}, 403));
       const provider = makeProvider(fetchImpl);
 
-      await expect(provider.checkAddress(FLAGGED_ADDRESS)).rejects.toThrow(/HTTP 403/);
+      await expect(provider.checkAddress(FLAGGED_ADDRESS)).rejects.toThrow(
+        /HTTP 403.*address \[redacted\]/,
+      );
     });
 
     it('throws with a timeout message when fetch is aborted by the timeout controller', async () => {
@@ -137,17 +139,21 @@ describe('RestSanctionsProvider', () => {
       const fetchImpl = jest.fn().mockRejectedValue(abortError);
       const provider = makeProvider(fetchImpl, { timeoutMs: 1 });
 
-      await expect(provider.checkAddress(FLAGGED_ADDRESS)).rejects.toThrow(/timed out/i);
+      const error = await provider.checkAddress(FLAGGED_ADDRESS).catch((caught) => caught);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(/timed out/i);
+      expect((error as Error).message).not.toContain(FLAGGED_ADDRESS);
     });
 
-    it('wraps a generic network error with address context', async () => {
+    it('wraps a generic network error without exposing the address', async () => {
       const networkError = new Error('ECONNREFUSED');
       const fetchImpl = jest.fn().mockRejectedValue(networkError);
       const provider = makeProvider(fetchImpl);
 
       await expect(provider.checkAddress(FLAGGED_ADDRESS)).rejects.toThrow(
-        new RegExp(`request failed for address ${FLAGGED_ADDRESS}`),
+        /request failed for address \[redacted\]/,
       );
+      await expect(provider.checkAddress(FLAGGED_ADDRESS)).rejects.not.toThrow(FLAGGED_ADDRESS);
     });
 
     it('passes an AbortSignal to fetch so the timeout can actually fire', async () => {

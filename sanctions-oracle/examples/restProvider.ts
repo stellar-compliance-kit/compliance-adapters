@@ -99,17 +99,15 @@ export class RestSanctionsProvider implements SanctionsProvider {
       const isTimeout =
         error instanceof Error && (error.name === 'AbortError' || error.name === 'TimeoutError');
       const message = isTimeout
-        ? `Watchlist API request timed out after ${this.timeoutMs} ms (address: ${address})`
-        : `Watchlist API request failed for address ${address}: ${String(error)}`;
+        ? `Watchlist API request timed out after ${this.timeoutMs} ms (address: [redacted])`
+        : `Watchlist API request failed for address [redacted]: ${String(error)}`;
       throw new Error(message);
     } finally {
       clearTimeout(timeoutHandle);
     }
 
     if (!response.ok) {
-      throw new Error(
-        `Watchlist API returned HTTP ${response.status} for address ${address}`,
-      );
+      throw new Error(`Watchlist API returned HTTP ${response.status} for address [redacted]`);
     }
 
     const data = (await response.json()) as SanctionsApiResponse;

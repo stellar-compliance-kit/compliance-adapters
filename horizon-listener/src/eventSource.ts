@@ -123,14 +123,28 @@ export class RpcEventSource implements EventSource {
 
     const getEventsPromise = server.getEvents(request);
 
-    const response: GetEventsResponse = this.options.timeoutMs
-      ? await Promise.race([
-          getEventsPromise,
-          new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`RPC getEvents timeout after ${this.options.timeoutMs}ms`)), this.options.timeoutMs)
-          ),
-        ])
-      : await getEventsPromise;
+    let response: GetEventsResponse;
+    if (this.options.timeoutMs) {
+      // The Stellar SDK does not expose an AbortSignal on getEvents. Attach a
+      // rejection handler to the in-flight request so a late failure after the
+      // timeout cannot become an unhandled rejection for the process.
+      void getEventsPromise.catch(() => undefined);
+
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () => reject(new Error(`RPC getEvents timeout after ${this.options.timeoutMs}ms`)),
+          this.options.timeoutMs,
+        );
+      });
+      try {
+        response = await Promise.race([getEventsPromise, timeoutPromise]);
+      } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+      }
+    } else {
+      response = await getEventsPromise;
+    }
 
     const rawEvents = (response as unknown as { events?: unknown[] }).events ?? [];
 
