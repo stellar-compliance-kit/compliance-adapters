@@ -183,7 +183,7 @@ The demo starts an Express server on `http://localhost:3000` and exposes:
 - `GET /sync`
 - `GET /challenge`
 
-You can configure runtime values with environment variables such as `SERVER_ACCOUNT_ID`, `RPC_URL`, and `CONTRACT_ID`.
+You can configure runtime values with environment variables such as `SERVER_ACCOUNT_ID`, `RPC_URL`, and `CONTRACT_ID`. See the root [`.env.example`](./.env.example) for the full list of documented variables across all packages.
 
 To try the sanctions sync script against testnet in dry-run mode (no transactions submitted, just
 logs what it would do):
