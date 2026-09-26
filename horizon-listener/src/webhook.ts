@@ -98,12 +98,6 @@ export class HttpWebhookSender implements WebhookSender {
     const body = JSON.stringify({ event });
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
-    if (this.signingSecret) {
-      const timestamp = Math.floor(Date.now() / 1000).toString();
-      headers['X-Timestamp'] = timestamp;
-      headers['X-Signature'] = `sha256=${this.sign(timestamp, body)}`;
-    }
-
     // The span covers the entire logical delivery (including retries), so it
     // is started once here and ended exactly once below on final success or
     // final failure — not per attempt.
@@ -130,6 +124,13 @@ export class HttpWebhookSender implements WebhookSender {
 
       const start = Date.now();
       try {
+        const attemptHeaders = { ...headers };
+        if (this.signingSecret) {
+          const timestamp = Math.floor(Date.now() / 1000).toString();
+          attemptHeaders['X-Timestamp'] = timestamp;
+          attemptHeaders['X-Signature'] = `sha256=${this.sign(timestamp, body)}`;
+        }
+
         const controller = this.timeoutMs ? new AbortController() : undefined;
         let timeoutHandle: NodeJS.Timeout | undefined;
 
@@ -140,7 +141,7 @@ export class HttpWebhookSender implements WebhookSender {
 
           const response = await this.fetchImpl(this.url, {
             method: 'POST',
-            headers,
+            headers: attemptHeaders,
             body,
             signal: controller?.signal,
           });

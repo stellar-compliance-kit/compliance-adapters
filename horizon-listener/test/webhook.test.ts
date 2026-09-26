@@ -110,6 +110,36 @@ describe('HttpWebhookSender', () => {
     }
   });
 
+  it('refreshes the timestamp and signature for each retry attempt', async () => {
+    const fetchImpl = jest
+      .fn()
+      .mockResolvedValueOnce({ ok: false, status: 503 })
+      .mockResolvedValueOnce({ ok: true, status: 200 });
+    const sender = new HttpWebhookSender({
+      url: 'http://localhost:9999/webhook',
+      signingSecret: 'retry-secret',
+      maxRetries: 1,
+      fetchImpl,
+    });
+    const fixedNowMs = 1_700_000_000_000;
+    let nowCalls = 0;
+    jest.spyOn(Date, 'now').mockImplementation(() => {
+      nowCalls += 1;
+      return fixedNowMs + (nowCalls > 2 ? 2000 : 0);
+    });
+    try {
+      await sender.send(makeEvent());
+
+      const firstHeaders = fetchImpl.mock.calls[0][1].headers as Record<string, string>;
+      const secondHeaders = fetchImpl.mock.calls[1][1].headers as Record<string, string>;
+      expect(firstHeaders['X-Timestamp']).toBe('1700000000');
+      expect(secondHeaders['X-Timestamp']).toBe('1700000002');
+      expect(secondHeaders['X-Signature']).not.toBe(firstHeaders['X-Signature']);
+    } finally {
+      jest.spyOn(Date, 'now').mockRestore();
+    }
+  });
+
   it('omits X-Timestamp when no signing secret is configured', async () => {
     const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
     const sender = new HttpWebhookSender({ url: 'http://localhost:9999/webhook', fetchImpl });

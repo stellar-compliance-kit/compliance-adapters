@@ -66,6 +66,15 @@ describe('MockSanctionsProvider.fromFile', () => {
     ).rejects.toThrow(`Failed to load flagged addresses from file ${filePath}`);
   });
 
+  it('rejects an explicitly empty file path instead of loading the default watchlist', async () => {
+    expect(() => new MockSanctionsProvider({ flaggedAddresses: '' })).toThrow(
+      'Failed to load flagged addresses from file',
+    );
+    await expect(MockSanctionsProvider.fromFile({ flaggedAddresses: '' })).rejects.toThrow(
+      'Failed to load flagged addresses from file',
+    );
+  });
+
   it('accepts a directly-passed object without touching the filesystem', async () => {
     const provider = await MockSanctionsProvider.fromFile({
       flaggedAddresses: { GDIRECTADDRESS: 'direct-source' },
