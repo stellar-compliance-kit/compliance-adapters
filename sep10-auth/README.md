@@ -204,9 +204,36 @@ value.
 | `revocationStore` | `RevocationStore` | `undefined` | Optional store consulted after challenge verification to reject revoked addresses before `timeoutSeconds` expires. |
 | `logger` | `Logger` | `noopLogger` | Injectable logger (`debug`, `info`, `warn`, `error`) for auth and revocation observability. |
 
-Because there's no session token, a challenge can't be revoked before its
-`timeoutSeconds` elapses unless you supply a `revocationStore`. An in-memory
-reference implementation is included:
+### Session revocation (`revocationStore`)
+
+A signed challenge stays usable until its `timeoutSeconds` elapse, because
+this package does not issue a session token. Pass `revocationStore` when an
+operator needs to cut an address off sooner.
+
+The store is checked only after challenge verification succeeds.
+`isRevoked` is called with the authenticated Stellar address. A revoked
+address is rejected with **401** before `req.stellarAddress` is set:
+
+```json
+{ "error": "unauthorized", "reason": "address revoked" }
+```
+
+If `isRevoked` throws or rejects, the error is passed to Express with
+`next(error)` and the request is not treated as authenticated.
+
+`RevocationStore` is the contract a backend implements. Every method may
+return its value directly or as a `Promise`.
+
+| Method | Behavior |
+|--------|----------|
+| `isRevoked(address)` | Whether `address` is currently revoked. |
+| `revoke(address, until?)` | Revokes `address`. Omit `until` to keep it revoked until `unrevoke`. Pass a `Date` to expire the revocation at that time. |
+| `unrevoke(address)` | Lifts a revocation previously set with `revoke`. |
+| `list?()` | Optional. Returns the addresses that are currently revoked. |
+
+`InMemoryRevocationStore` is the included reference implementation. It holds
+revocations in a process-local `Map`, so they do not survive a process
+restart and are not shared across instances.
 
 ```ts
 import { createSep10Middleware, InMemoryRevocationStore } from 'sep10-auth';
@@ -223,12 +250,18 @@ app.use(
   })
 );
 
-// elsewhere, to cut off access immediately:
+// Cut off access immediately, without waiting for timeoutSeconds:
 revocationStore.revoke(someAddress);
+
+// Or revoke until a specific time, then lift it early if needed:
+revocationStore.revoke(someAddress, new Date(Date.now() + 15 * 60_000));
+revocationStore.unrevoke(someAddress);
 ```
 
-Implement the `RevocationStore` interface yourself to back it with Redis, a
-database, etc.
+For a store that survives restarts, implement `RevocationStore` against
+Redis or a database.
+[`examples/redisRevocationStore.ts`](./examples/redisRevocationStore.ts) is
+a copy-in Redis example and is not a dependency of this package.
 
 sep10-auth has no built-in logging (and its lint config forbids `console.*`
 calls), so pass a `logger` implementing the `Logger` interface (`debug` /
@@ -312,7 +345,8 @@ Express app wiring together the full challenge/verify roundtrip.
 ## Scope
 
 This package only implements the SEP-10 building blocks (challenge
-generation, verification, thin middleware, and rate limiting). It does not
+generation, verification, thin middleware, rate limiting, and session
+revocation). It does not
 collect the user's signature itself — clients are responsible for signing
 the challenge with their own wallet (e.g. [Freighter](https://www.freighter.app/)
 or another Stellar wallet) and sending the signed XDR back.
