@@ -17,6 +17,18 @@ export interface HorizonListenerOptions {
   eventSource: EventSource;
   onEvent: (event: RawContractEvent) => Promise<void> | void;
   onEventFailure?: (event: RawContractEvent, error: unknown) => void | Promise<void>;
+  /**
+   * Optional retry policy for failed event handlers. `maxRetries` is the
+   * maximum number of total `onEvent` attempts, including the initial call.
+  * Defaults to 3 attempts when this option is provided. When the option is
+  * omitted, failed events are handled after one attempt as before.
+   */
+  eventRetry?: {
+    maxRetries?: number;
+    jitter?: boolean;
+    baseMs?: number;
+    maxMs?: number;
+  };
   pollIntervalMs?: number;
   /**
    * Maximum number of consecutive polling failures before giving up.
@@ -91,6 +103,7 @@ export class HorizonListener {
   private readonly eventSource: EventSource;
   private readonly onEvent: (event: RawContractEvent) => Promise<void> | void;
   private readonly onEventFailure?: (event: RawContractEvent, error: unknown) => void | Promise<void>;
+  private readonly eventRetry: HorizonListenerOptions['eventRetry'];
   private readonly pollIntervalMs: number;
   private readonly maxRetries: number;
   private readonly logger: Logger;
@@ -110,6 +123,7 @@ export class HorizonListener {
     this.eventSource = options.eventSource;
     this.onEvent = options.onEvent;
     this.onEventFailure = options.onEventFailure;
+    this.eventRetry = options.eventRetry;
     this.pollIntervalMs = options.pollIntervalMs ?? 5000;
     this.maxRetries = options.maxRetries ?? 10;
     this.logger = options.logger ?? consoleLogger;
@@ -204,7 +218,28 @@ export class HorizonListener {
 
         try {
           this.logger.info('horizon-listener: received contract event', event);
-          await this.onEvent(event);
+          const maxEventAttempts = this.eventRetry == null
+            ? 1
+            : this.eventRetry.maxRetries ?? 3;
+          let eventAttempt = 0;
+          while (true) {
+            eventAttempt += 1;
+            try {
+              await this.onEvent(event);
+              break;
+            } catch (err) {
+              if (eventAttempt >= maxEventAttempts) {
+                throw err;
+              }
+
+              this.logger.warn(
+                `horizon-listener: onEvent handler failed (attempt ${eventAttempt}/${maxEventAttempts}), retrying`,
+                err,
+              );
+              const { maxRetries: _maxRetries, ...backoffOptions } = this.eventRetry ?? {};
+              await this.sleep(computeBackoffDelayMs(eventAttempt, backoffOptions));
+            }
+          }
           const relayDuration = Date.now() - relayStart;
           this.metrics.counter.inc('event_relay', 'success');
           this.metrics.histogram.observe('event_relay', relayDuration);
