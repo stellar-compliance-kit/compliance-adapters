@@ -12,7 +12,7 @@
     "typecheck": "tsc -p . --noEmit"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.12",
+    "@types/jest": "^30.0.0",
     "typescript": "^5.5.4",
     "@types/node": "^20.14.0"
   },
