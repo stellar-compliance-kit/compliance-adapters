@@ -21,10 +21,12 @@ export {
   type RpcEventType,
 } from './eventSource';
 export {
-  HorizonEventSource,
-  type HorizonEventSourceOptions,
-  type HorizonRecord,
-} from './horizonEventSource';
+  toJsonSafe,
+  decodeScValToJson,
+  decodeTopicToString,
+  type EventDecodeMode,
+  type JsonSafeValue,
+} from './decode';
 export {
   InMemoryDeadLetterQueue,
   FileDeadLetterQueue,

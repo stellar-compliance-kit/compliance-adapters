@@ -4,47 +4,7 @@
  */
 
 import { rpc } from '@stellar/stellar-sdk';
-import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
-
-/**
- * Raised when the requested cursor/startLedger points at history the RPC node
- * has already pruned (i.e. it falls outside the node's retention window).
- * Retrying the same request can never succeed, so the listener stops (or, with
- * `onGap: 'skipToOldest'`, resumes from `oldestAvailable`).
- */
-export class CursorOutOfRangeError extends Error {
-  readonly requested: string | number | undefined;
-  readonly oldestAvailable: number | undefined;
-
-  constructor(requested: string | number | undefined, oldestAvailable: number | undefined, cause?: unknown) {
-    super(
-      `horizon-listener: requested ${requested ?? 'position'} is outside the RPC retention window` +
-        (oldestAvailable != null ? ` (oldest available ledger: ${oldestAvailable})` : ''),
-    );
-    this.name = 'CursorOutOfRangeError';
-    this.requested = requested;
-    this.oldestAvailable = oldestAvailable;
-    if (cause !== undefined) (this as { cause?: unknown }).cause = cause;
-  }
-}
-
-const OUT_OF_RANGE_PATTERN = /out of range|ledger range|outside (of )?the (retention|ledger)|pruned|older than the oldest/i;
-
-/**
- * Converts a Soroban RPC "out of range" error into a {@link CursorOutOfRangeError};
- * returns undefined for any other error.
- */
-export function toCursorOutOfRangeError(
-  err: unknown,
-  requested: string | number | undefined,
-): CursorOutOfRangeError | undefined {
-  if (err instanceof CursorOutOfRangeError) return err;
-  const e = err as { message?: unknown; code?: unknown; response?: { data?: { error?: { message?: unknown } } } };
-  const message = String(e?.response?.data?.error?.message ?? e?.message ?? err ?? '');
-  if (!OUT_OF_RANGE_PATTERN.test(message)) return undefined;
-  const range = /(\d+)\s*-\s*(\d+)/.exec(message);
-  return new CursorOutOfRangeError(requested, range ? Number(range[1]) : undefined, err);
-}
+import { type EventDecodeMode, decodeScValToJson, decodeTopicToString } from './decode';
 
 /**
  * A normalised representation of a single Soroban contract event as returned
@@ -134,17 +94,13 @@ export interface RpcEventSourceOptions {
   // Left undefined, no timeout is applied (relies on SDK's default).
   timeoutMs?: number;
   /**
-   * Optional topic filters passed through to Soroban RPC `getEvents`. Each
-   * filter is an array of 1-4 topic segments (base64 XDR `ScVal` strings),
-   * where `*` matches any single segment. Events matching any filter are
-   * returned. Left undefined, all topics are returned.
+   * 'none' (default): topics are `String()`-ed and `value` is the raw SDK
+   * ScVal. 'native': `scValToNative` is applied to topics and value, encoded
+   * JSON-safely (bigint as decimal string, bytes as hex), so consumers and
+   * webhook receivers don't need stellar-sdk. Non-string topic segments are
+   * JSON-encoded so `topic` stays `string[]`.
    */
-  topics?: string[][];
-  /**
-   * Which event types to request: `contract` (default), `system`,
-   * `diagnostic`, or `all` (no type restriction).
-   */
-  eventType?: RpcEventType;
+  decode?: EventDecodeMode;
 }
 
 export type RpcEventType = 'contract' | 'system' | 'diagnostic' | 'all';
@@ -270,7 +226,10 @@ export class RpcEventSource implements EventSource {
       ? await Promise.race([
           getEventsPromise,
           new Promise<never>((_, reject) =>
-            setTimeout(() => reject(new Error(`RPC getEvents timeout after ${this.options.timeoutMs}ms`)), this.options.timeoutMs)
+            setTimeout(
+              () => reject(new Error(`RPC getEvents timeout after ${this.options.timeoutMs}ms`)),
+              this.options.timeoutMs,
+            ),
           ),
         ])
       : await getEventsPromise;
@@ -285,12 +244,15 @@ export class RpcEventSource implements EventSource {
         topic?: unknown[];
         value: unknown;
       };
+      const native = this.options.decode === 'native';
       return {
         id: event.id,
         contractId: event.contractId,
         ledger: event.ledger,
-        topic: (event.topic ?? []).map((topicItem) => String(topicItem)),
-        value: event.value,
+        topic: (event.topic ?? []).map((topicItem) =>
+          native ? decodeTopicToString(topicItem) : String(topicItem),
+        ),
+        value: native ? decodeScValToJson(event.value) : event.value,
       };
     });
 

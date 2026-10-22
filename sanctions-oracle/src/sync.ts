@@ -17,9 +17,8 @@ import {
 import { isValidStellarAddress, normalizeStellarAddress } from '@compliance-adapters/shared';
 import { type Logger, noopLogger, consoleLogger } from '@compliance-adapters/logger';
 export type { Logger } from '@compliance-adapters/logger';
-import { SanctionsProvider } from './SanctionsProvider';
-import { SyncCheckpointStore, FileCheckpointStore } from './checkpoint';
-import { createJsonlAuditLogger } from './auditLog';
+import { SanctionsProvider, CheckResult } from './SanctionsProvider';
+import { SyncCheckpointStore } from './checkpoint';
 import { MockSanctionsProvider } from './mockProvider';
 import { CsvSanctionsProvider } from './csvProvider';
 import { RateLimitedSanctionsProvider } from './rateLimitedProvider';
@@ -30,7 +29,7 @@ import { type Signer, toSigner, signTransaction } from './signer';
 import { computeBackoffDelayMs, BackoffOptions } from '@compliance-adapters/backoff';
 
 interface CacheEntry {
-  result: { flagged: boolean; source: string };
+  result: CheckResult;
   timestamp: number;
 }
 
@@ -42,7 +41,7 @@ export class ProviderResultCache {
   private cache: Map<string, CacheEntry> = new Map();
   private readonly ttlMs: number;
   private readonly maxEntries?: number;
-  private readonly inFlight = new Map<string, Promise<{ flagged: boolean; source: string }>>();
+  private readonly inFlight = new Map<string, Promise<CheckResult>>();
 
   /**
    * Create a result cache with a specified time-to-live (TTL).
@@ -59,7 +58,7 @@ export class ProviderResultCache {
    * Get a cached result if available and not expired.
    * @returns The cached result, or undefined if not found or expired
    */
-  get(address: string): { flagged: boolean; source: string } | undefined {
+  get(address: string): CheckResult | undefined {
     const entry = this.cache.get(address);
     if (!entry) return undefined;
 
@@ -79,7 +78,7 @@ export class ProviderResultCache {
   /**
    * Store a result in the cache.
    */
-  set(address: string, result: { flagged: boolean; source: string }): void {
+  set(address: string, result: CheckResult): void {
     this.cache.delete(address);
     this.cache.set(address, {
       result,
@@ -108,10 +107,7 @@ export class ProviderResultCache {
    * in-flight promise, so concurrent lookups for the same address do not race to
    * populate the cache with duplicate provider calls.
    */
-  async getOrLoad(
-    address: string,
-    load: () => Promise<{ flagged: boolean; source: string }>,
-  ): Promise<{ flagged: boolean; source: string }> {
+  async getOrLoad(address: string, load: () => Promise<CheckResult>): Promise<CheckResult> {
     const cached = this.get(address);
     if (cached) {
       return cached;
@@ -122,9 +118,9 @@ export class ProviderResultCache {
       return existing;
     }
 
-    let resolve!: (value: { flagged: boolean; source: string }) => void;
+    let resolve!: (value: CheckResult) => void;
     let reject!: (reason?: unknown) => void;
-    const next = new Promise<{ flagged: boolean; source: string }>((res, rej) => {
+    const next = new Promise<CheckResult>((res, rej) => {
       resolve = res;
       reject = rej;
     });
@@ -275,12 +271,82 @@ export interface SyncOptions {
    */
   resume?: boolean;
   /**
-   * Optional hard deadline for the run, in milliseconds. Once it passes, no
-   * new provider checks are started; in-flight checks finish, already-flagged
-   * addresses are written and checkpointed, and the result reports
-   * `deadlineExceeded: true` with the untouched addresses in `unprocessed`.
+   * Optional score threshold. When set, a flagged result whose provider
+   * `score` is below this value is not written on-chain; it is reported in
+   * {@link SyncResult.needsReview} for manual review instead. Flagged results
+   * without a score, or with `score >= minScoreToBlock`, are written as usual.
    */
-  maxDurationMs?: number;
+  minScoreToBlock?: number;
+  /**
+   * Dry-run only. Estimates the fee (in stroops) of one representative
+   * `add_to_denylist` transaction for the given sample address, e.g. via
+   * {@link createRpcFeeEstimator}. The estimate is multiplied by the number of
+   * pending writes and reported in {@link SyncResult.feeEstimate}. A failing
+   * estimator never fails the dry-run; the error is reported instead.
+   */
+  feeEstimator?: (sampleAddress: string) => Promise<bigint | number | string>;
+}
+
+/** Estimated cost of the writes a dry-run would perform. */
+export interface FeeEstimate {
+  /** Number of `add_to_denylist` writes the live run would submit. */
+  pendingWrites: number;
+  /** Simulated fee of one representative transaction, in stroops (decimal string). */
+  perTxFeeStroops?: string;
+  /** perTxFeeStroops * pendingWrites, in stroops (decimal string). */
+  totalFeeStroops?: string;
+  /** totalFeeStroops expressed in XLM (1 XLM = 10,000,000 stroops). */
+  totalFeeXlm?: string;
+  /** Set when the simulation failed; the other fee fields are then absent. */
+  error?: string;
+}
+
+const STROOPS_PER_XLM = BigInt(10_000_000);
+
+/** Formats a stroop amount as an exact XLM decimal string. */
+export function stroopsToXlm(stroops: bigint): string {
+  const negative = stroops < BigInt(0);
+  const abs = negative ? -stroops : stroops;
+  const whole = abs / STROOPS_PER_XLM;
+  const frac = (abs % STROOPS_PER_XLM).toString().padStart(7, '0');
+  return `${negative ? '-' : ''}${whole}.${frac}`;
+}
+
+async function estimateDryRunFee(
+  pending: string[],
+  feeEstimator: NonNullable<SyncOptions['feeEstimator']>,
+): Promise<FeeEstimate> {
+  const estimate: FeeEstimate = { pendingWrites: pending.length };
+  if (pending.length === 0) {
+    return {
+      ...estimate,
+      perTxFeeStroops: '0',
+      totalFeeStroops: '0',
+      totalFeeXlm: stroopsToXlm(BigInt(0)),
+    };
+  }
+  try {
+    const perTx = BigInt(await feeEstimator(pending[0]));
+    const total = perTx * BigInt(pending.length);
+    return {
+      ...estimate,
+      perTxFeeStroops: perTx.toString(),
+      totalFeeStroops: total.toString(),
+      totalFeeXlm: stroopsToXlm(total),
+    };
+  } catch (err) {
+    return {
+      ...estimate,
+      error: `Fee estimate failed (simulation error): ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+}
+
+/** A flagged address held back for manual review (score below threshold). */
+export interface ReviewAddress {
+  address: string;
+  source: string;
+  score: number;
 }
 
 /** CLI exit code used when a run stops because `--max-duration` elapsed. */
@@ -347,10 +413,14 @@ export interface SyncResult {
   plannedRemovals?: { address: string; source: string }[];
   /** Reconcile mode only: cleared addresses whose removal transaction failed. */
   failedRemovals?: FailedAddress[];
-  /** True when {@link SyncOptions.maxDurationMs} elapsed before every address was checked. */
-  deadlineExceeded?: boolean;
-  /** Addresses never checked because the deadline elapsed. */
-  unprocessed?: string[];
+  /**
+   * Flagged addresses whose score fell below {@link SyncOptions.minScoreToBlock}.
+   * Reported for manual review and never written. Present only when
+   * `minScoreToBlock` is set.
+   */
+  needsReview?: ReviewAddress[];
+  /** Dry-run only: estimated fee for the pending writes (see {@link SyncOptions.feeEstimator}). */
+  feeEstimate?: FeeEstimate;
 }
 
 interface FlaggedAddressWithSource {
@@ -407,7 +477,8 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     checkpoint,
     resume = false,
     reconcile = false,
-    maxDurationMs,
+    minScoreToBlock,
+    feeEstimator,
   } = options;
   const deadline = maxDurationMs !== undefined ? Date.now() + maxDurationMs : undefined;
   const pastDeadline = () => deadline !== undefined && Date.now() >= deadline;
@@ -442,12 +513,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
 
   safeLogger.info('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
 
-  if (
-    reconcile &&
-    !dryRun &&
-    !writer.removeFromDenylist &&
-    !writer.removeFromDenylistWithSource
-  ) {
+  if (reconcile && !dryRun && !writer.removeFromDenylist && !writer.removeFromDenylistWithSource) {
     throw new Error(
       'sanctions-oracle: reconcile requires a writer that implements removeFromDenylist',
     );
@@ -515,17 +581,16 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     }
   }
 
-  const inflightChecks = new Map<string, Promise<{ flagged: boolean; source: string }>>();
+  const inflightChecks = new Map<string, Promise<CheckResult>>();
   const flagged: string[] = [];
   const flaggedWithSource: FlaggedAddressWithSource[] = [];
+  const needsReview: ReviewAddress[] = [];
   const clearedWithSource: FlaggedAddressWithSource[] = [];
   const failed: string[] = [];
   const failedWithReasons: FailedAddress[] = [];
   let checked = 0;
 
-  const getAddressResult = async (
-    address: string,
-  ): Promise<{ flagged: boolean; source: string }> => {
+  const getAddressResult = async (address: string): Promise<CheckResult> => {
     if (cache) {
       return cache.getOrLoad(address, () => withRetry(() => provider.checkAddress(address), retry));
     }
@@ -535,9 +600,9 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
       return cached;
     }
 
-    let resolve!: (value: { flagged: boolean; source: string }) => void;
+    let resolve!: (value: CheckResult) => void;
     let reject!: (reason?: unknown) => void;
-    const pending = new Promise<{ flagged: boolean; source: string }>((res, rej) => {
+    const pending = new Promise<CheckResult>((res, rej) => {
       resolve = res;
       reject = rej;
     });
@@ -575,7 +640,15 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         metrics.histogram.observe('address_check', durationMs);
         span.setAttribute('address_check.flagged', result.flagged);
         span.end('ok');
-        if (result.flagged) {
+        if (
+          result.flagged &&
+          minScoreToBlock !== undefined &&
+          typeof result.score === 'number' &&
+          result.score < minScoreToBlock
+        ) {
+          // Low-confidence match: report for manual review, never write.
+          needsReview.push({ address, source: result.source, score: result.score });
+        } else if (result.flagged) {
           flagged.push(address);
           flaggedWithSource.push({ address, source: result.source });
         } else if (reconcile && currentDenylistSet.has(address)) {
@@ -623,12 +696,25 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   });
 
   const written: string[] = [];
+  let feeEstimate: FeeEstimate | undefined;
   if (dryRun) {
+    const pendingWrites: string[] = [];
     for (const { address } of flaggedWithSource) {
       if (currentDenylistSet.has(address)) {
         continue;
       }
+      pendingWrites.push(address);
       safeLogger.info('sanctions-oracle: [dry-run] would call add_to_denylist', { address });
+    }
+    if (feeEstimator) {
+      feeEstimate = await estimateDryRunFee(pendingWrites, feeEstimator);
+      if (feeEstimate.error) {
+        safeLogger.warn('sanctions-oracle: [dry-run] fee estimate failed', {
+          error: feeEstimate.error,
+        });
+      } else {
+        safeLogger.info('sanctions-oracle: [dry-run] estimated fee', feeEstimate);
+      }
     }
   } else {
     for (const { address, source } of flaggedWithSource) {
@@ -733,7 +819,41 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
           failedRemovals,
         }
       : {}),
-    ...(maxDurationMs !== undefined ? { deadlineExceeded, unprocessed } : {}),
+    ...(minScoreToBlock !== undefined ? { needsReview } : {}),
+    ...(feeEstimate ? { feeEstimate } : {}),
+  };
+}
+
+export interface RpcFeeEstimatorOptions {
+  rpcUrl: string;
+  networkPassphrase: string;
+  contractId: string;
+  /** Public key (G...) of the account that would submit the writes. */
+  sourcePublicKey: string;
+}
+
+/**
+ * Builds a {@link SyncOptions.feeEstimator} that simulates one
+ * `add_to_denylist` call via Soroban RPC and returns the prepared
+ * transaction's total fee (inclusion + resource fee) in stroops.
+ * Nothing is signed or submitted.
+ */
+export function createRpcFeeEstimator(
+  options: RpcFeeEstimatorOptions,
+): (sampleAddress: string) => Promise<string> {
+  const { rpcUrl, networkPassphrase, contractId, sourcePublicKey } = options;
+  const server = new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
+  const contract = new Contract(contractId);
+  return async (sampleAddress: string) => {
+    const account = await server.getAccount(sourcePublicKey);
+    const tx = new TransactionBuilder(account, { fee: BASE_FEE, networkPassphrase })
+      .addOperation(
+        contract.call('add_to_denylist', nativeToScVal(sampleAddress, { type: 'address' })),
+      )
+      .setTimeout(30)
+      .build();
+    const prepared = await server.prepareTransaction(tx);
+    return prepared.fee;
   };
 }
 
@@ -1202,6 +1322,18 @@ export async function runCli(argv?: string[]): Promise<void> {
   }
 
   if (args.dryRun) {
+    // Fee estimation needs RPC details and the submitting account; it is
+    // skipped (no feeEstimate in the report) when they are not provided.
+    const dryRunSecret = process.env.SANCTIONS_ORACLE_SECRET_KEY ?? args.secretKey;
+    const dryRunFeeEstimator =
+      args.contractId && args.rpcUrl && args.networkPassphrase && dryRunSecret
+        ? createRpcFeeEstimator({
+            rpcUrl: args.rpcUrl,
+            networkPassphrase: args.networkPassphrase,
+            contractId: args.contractId,
+            sourcePublicKey: Keypair.fromSecret(dryRunSecret).publicKey(),
+          })
+        : undefined;
     const result = await syncSanctionsToDenylist({
       provider,
       addresses,
@@ -1214,9 +1346,16 @@ export async function runCli(argv?: string[]): Promise<void> {
       logger,
       currentDenylist,
       reconcile: args.reconcile,
-      maxDurationMs: args.maxDurationMs,
+      ...(dryRunFeeEstimator ? { feeEstimator: dryRunFeeEstimator } : {}),
     });
-    if (!args.json) logger.info('sanctions-oracle: dry-run result', result);
+    if (result.feeEstimate?.error) {
+      logger.error?.(`sanctions-oracle: ${result.feeEstimate.error}`);
+    } else if (result.feeEstimate) {
+      logger.info(
+        `sanctions-oracle: estimated fee for ${result.feeEstimate.pendingWrites} write(s): ${result.feeEstimate.totalFeeStroops} stroops (${result.feeEstimate.totalFeeXlm} XLM)`,
+      );
+    }
+    logger.info('sanctions-oracle: dry-run result', result);
     // CLI-only: the machine-readable result is written to stdout so it can be
     // piped/redirected independently of the human-readable logger stream.
     // eslint-disable-next-line no-console
@@ -1248,13 +1387,16 @@ export async function runCli(argv?: string[]): Promise<void> {
     networkPassphrase: args.networkPassphrase,
     contractId: args.contractId,
     sourceKeypair: Keypair.fromSecret(secretKey),
-    // --audit-log persists every write; otherwise delistings are logged with
-    // the clearing provider's source.
-    ...(args.auditLogPath
-      ? { auditLogger: createJsonlAuditLogger(args.auditLogPath), logger }
-      : args.reconcile
-        ? { auditLogger: (entry: AuditLogEntry) => logger.info('sanctions-oracle: audit', entry), logger }
-        : {}),
+    ...(process.env.SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY
+      ? { feeSource: Keypair.fromSecret(process.env.SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY) }
+      : {}),
+    // Every delisting is recorded with the clearing provider's source.
+    ...(args.reconcile
+      ? {
+          auditLogger: (entry: AuditLogEntry) => logger.info('sanctions-oracle: audit', entry),
+          logger,
+        }
+      : {}),
   });
 
   const result = await syncSanctionsToDenylist({

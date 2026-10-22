@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-export { SanctionsProvider } from './SanctionsProvider';
+export { SanctionsProvider, CheckResult } from './SanctionsProvider';
 export { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from './mockProvider';
 export { CsvSanctionsProvider, parseCsv } from './csvProvider';
 export {
@@ -20,7 +20,11 @@ export {
   RpcDenylistWriterOptions,
   CliArgs,
   toSafeLogString,
-  EXIT_CODE_DEADLINE_EXCEEDED,
+  createRpcFeeEstimator,
+  stroopsToXlm,
+  ReviewAddress,
+  FeeEstimate,
+  RpcFeeEstimatorOptions,
 } from './sync';
 export { SyncCheckpointStore, InMemoryCheckpointStore, FileCheckpointStore } from './checkpoint';
 export { createJsonlAuditLogger, JsonlAuditLoggerOptions } from './auditLog';
