@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **repo** — `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `.devcontainer` config for Codespaces,
+  `npm run clean`, and a root Jest `projects` config so `npm test` runs all suites with combined
+  coverage.
 - **sep10-auth** — rate limiting middleware for challenge/verify endpoints, session revocation
   via `RevocationStore`, and `client_domain` verification support.
 - **sanctions-oracle** — `ProviderRegistry` for falling back across multiple sanctions data

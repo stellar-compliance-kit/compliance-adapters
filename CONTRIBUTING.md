@@ -18,8 +18,15 @@ are labeled by complexity so you can pick work that matches your available time 
 Check open issues for the current bounty/reward status under the Drips Wave program before
 starting work, and comment on an issue to claim it so we don't get duplicate PRs.
 
+## Code of Conduct
+
+This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.md). By
+participating you are expected to uphold it.
+
 ## Getting started
 
+The quickest setup is a GitHub Codespace or VS Code Dev Container: `.devcontainer/devcontainer.json`
+provides Node 20, Docker (for e2e tests) and the Stellar CLI, and runs `npm ci` on create.
 New to the Stellar ecosystem? Check the [Glossary](./docs/glossary.md) for definitions of common
 terms like StrKey, SEP-10, muxed account, ScVal, and network passphrase before diving in.
 
@@ -37,6 +44,14 @@ package's tests with:
 ```bash
 npm test --workspace=sep10-auth
 ```
+
+`npm test` runs every package suite in a single Jest run via the root `jest.config.js`
+(`projects`), and `npm run test:coverage` produces one combined report in `coverage/`. Shared Jest
+settings live in `jest.base.js`. Run one package from the root with
+`npx jest --selectProjects sep10-auth`.
+
+If you see confusing results from stale build output, run `npm run clean` to remove `dist/`,
+`coverage/` and `*.tsbuildinfo` from the root and every workspace (cross-platform, via `rimraf`).
 
 ## Development workflow
 

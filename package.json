@@ -27,9 +27,9 @@
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present -- --testPathIgnorePatterns=e2e-tests",
-    "test:cli": "jest --config jest.config.js",
-    "test:coverage": "npm test -- --coverage",
+    "test": "jest",
+    "test:cli": "jest --selectProjects cli",
+    "test:coverage": "jest --coverage",
     "report:coverage": "node scripts/report-coverage.js",
     "test:e2e:start": "docker-compose -f e2e-tests/docker-compose.yml up -d",
     "test:e2e:stop": "docker-compose -f e2e-tests/docker-compose.yml down -v",
@@ -48,7 +48,9 @@
     "version": "changeset version",
     "changelog": "changeset status",
     "release": "npm run check:changelog && changeset publish",
-    "apply-package-labels": "node ./scripts/apply-package-labels.js"
+    "apply-package-labels": "node ./scripts/apply-package-labels.js",
+    "test:workspaces": "npm run test --workspaces --if-present -- --testPathIgnorePatterns=e2e-tests",
+    "clean": "rimraf --glob \"dist\" \"coverage\" \"*.tsbuildinfo\" \"*/dist\" \"*/coverage\" \"*/*.tsbuildinfo\" \"examples/*/dist\" \"examples/*/coverage\" \"examples/*/*.tsbuildinfo\""
   },
   "devDependencies": {
     "@changesets/changelog-github": "^0.7.0",
@@ -61,6 +63,7 @@
     "eslint-config-prettier": "^9.1.0",
     "jest": "^29.7.0",
     "prettier": "^3.3.3",
+    "rimraf": "^5.0.10",
     "ts-jest": "^29.2.4",
     "typescript": "^5.5.4"
   },

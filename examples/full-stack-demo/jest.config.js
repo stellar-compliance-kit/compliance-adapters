@@ -1,5 +1,6 @@
 /** @type {import('jest').Config} */
 module.exports = {
+  displayName: 'full-stack-demo',
   testEnvironment: 'node',
   testMatch: ['**/*.test.js'],
   // Note: these tests intentionally exercise the real built workspace packages

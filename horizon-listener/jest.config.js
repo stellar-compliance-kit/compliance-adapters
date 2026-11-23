@@ -1,6 +1,6 @@
 module.exports = {
-  preset: 'ts-jest',
-  testEnvironment: 'node',
+  ...require('../jest.base.js'),
+  displayName: 'horizon-listener',
   testMatch: ['**/test/**/*.test.ts'],
   // @stellar/stellar-sdk and @noble/* ship ESM. We must NOT ignore them in
   // transformIgnorePatterns, and we must route their .js files through
