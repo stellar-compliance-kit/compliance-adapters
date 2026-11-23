@@ -24,6 +24,13 @@ export interface RetryWithBackoffOptions extends BackoffOptions {
   sleepFn?: (ms: number) => Promise<void>;
   /** Optional AbortSignal to cancel pending sleep and abort retries. */
   signal?: AbortSignal;
+  /**
+   * Optional hook to extract a server-provided Retry-After delay (in ms) from
+   * an error, e.g. from an HTTP 429/503 `Retry-After` header. When it returns a
+   * finite non-negative number, the larger of the computed backoff delay and
+   * this value is used. Returning `undefined`/`null` leaves backoff unchanged.
+   */
+  getRetryAfterMs?: (err: unknown) => number | undefined | null;
 }
 
 export type RetryOptions = RetryWithBackoffOptions;
@@ -134,6 +141,7 @@ export async function retryWithBackoff<T>(
 
   const shouldRetry = options.shouldRetry ?? (() => true);
   const sleepFn = options.sleepFn ?? ((ms: number) => defaultSleep(ms, options.signal));
+  const getRetryAfterMs = options.getRetryAfterMs;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (options.signal?.aborted) {
@@ -148,7 +156,18 @@ export async function retryWithBackoff<T>(
         throw err;
       }
 
-      const delay = computeBackoffDelayMs(attempt, options);
+      let delay = computeBackoffDelayMs(attempt, options);
+      if (getRetryAfterMs) {
+        const retryAfterMs = getRetryAfterMs(err);
+        if (
+          typeof retryAfterMs === 'number' &&
+          Number.isFinite(retryAfterMs) &&
+          retryAfterMs >= 0 &&
+          retryAfterMs > delay
+        ) {
+          delay = retryAfterMs;
+        }
+      }
       await sleepFn(delay);
     }
   }

@@ -137,4 +137,40 @@ describe('computeBackoffDelayMs', () => {
     expect(() => computeBackoffDelayMs(-1)).toThrow(RangeError);
     expect(() => computeBackoffDelayMs(Infinity)).toThrow(RangeError);
   });
+
+  describe('getRetryAfterMs hook', () => {
+    it('uses the Retry-After value when it is larger than the computed delay', () => {
+      const err = { status: 429, retryAfterMs: 5000 };
+      const delay = computeBackoffDelayMs(0, {
+        jitter: false,
+        getRetryAfterMs: (e) => (e as typeof err).retryAfterMs,
+        err,
+      });
+      expect(delay).toBe(5000);
+    });
+
+    it('uses the computed delay when it is larger than the Retry-After value', () => {
+      const err = { status: 503, retryAfterMs: 100 };
+      const delay = computeBackoffDelayMs(3, {
+        jitter: false,
+        getRetryAfterMs: (e) => (e as typeof err).retryAfterMs,
+        err,
+      });
+      expect(delay).toBe(4000);
+    });
+
+    it('falls back to the computed delay when the hook returns undefined', () => {
+      const delay = computeBackoffDelayMs(2, {
+        jitter: false,
+        getRetryAfterMs: () => undefined,
+        err: new Error('no retry-after'),
+      });
+      expect(delay).toBe(2000);
+    });
+
+    it('is a no-op when the hook is not provided', () => {
+      const delay = computeBackoffDelayMs(1, { jitter: false });
+      expect(delay).toBe(1000);
+    });
+  });
 });
