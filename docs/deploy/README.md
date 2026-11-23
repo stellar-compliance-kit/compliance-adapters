@@ -26,3 +26,47 @@ sudo systemctl daemon-reload && sudo systemctl enable --now sanctions-sync.timer
 ```
 
 Tip: run once with `--dry-run` first to check the fee estimate and the planned writes.
+
+## `sep10-auth` rate limiter: trust proxy
+
+The `sep10-auth` rate limiter's default key generator uses `req.ip`. Behind a
+load balancer or reverse proxy, `req.ip` is the proxy's address unless the app
+is told to trust the proxy's forwarding headers. Without that, **every client
+shares one IP and gets rate limited together** — one noisy client can lock out
+everyone else.
+
+Configure trust proxy so `req.ip` reflects the real client address. Only trust
+proxies you control; trusting all hops (`true`) lets clients spoof `X-Forwarded-For`.
+
+### Express
+
+```js
+import express from 'express';
+import { sep10Auth } from '@stellar/sep10-auth';
+
+const app = express();
+
+// Trust the first hop (your load balancer / ingress).
+// Use a specific IP/CIDR or hop count in production, e.g. '10.0.0.0/8' or 1.
+app.set('trust proxy', 1);
+
+app.use(sep10Auth({ /* ... */ }));
+```
+
+### Fastify
+
+```js
+import Fastify from 'fastify';
+import { sep10Auth } from '@stellar/sep10-auth';
+
+const app = Fastify({
+  // Trust the first hop (your load balancer / ingress).
+  // Use a specific IP/CIDR or hop count in production, e.g. '10.0.0.0/8' or 1.
+  trustProxy: 1,
+});
+
+await app.register(sep10Auth, { /* ... */ });
+```
+
+If you cannot configure trust proxy, supply a custom key generator that derives
+the client identity from a header you control instead of relying on `req.ip`.

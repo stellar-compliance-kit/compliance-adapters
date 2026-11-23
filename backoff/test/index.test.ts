@@ -137,4 +137,97 @@ describe('computeBackoffDelayMs', () => {
     expect(() => computeBackoffDelayMs(-1)).toThrow(RangeError);
     expect(() => computeBackoffDelayMs(Infinity)).toThrow(RangeError);
   });
+
+  describe('getRetryAfterMs hook', () => {
+    it('uses the Retry-After value when it is larger than the computed delay', () => {
+      const err = { status: 429, retryAfterMs: 5000 };
+      const delay = computeBackoffDelayMs(0, {
+        jitter: false,
+        getRetryAfterMs: (e) => (e as typeof err).retryAfterMs,
+        err,
+      });
+      expect(delay).toBe(5000);
+    });
+
+    it('uses the computed delay when it is larger than the Retry-After value', () => {
+      const err = { status: 503, retryAfterMs: 100 };
+      const delay = computeBackoffDelayMs(3, {
+        jitter: false,
+        getRetryAfterMs: (e) => (e as typeof err).retryAfterMs,
+        err,
+      });
+      expect(delay).toBe(4000);
+    });
+
+    it('falls back to the computed delay when the hook returns undefined', () => {
+      const delay = computeBackoffDelayMs(2, {
+        jitter: false,
+        getRetryAfterMs: () => undefined,
+        err: new Error('no retry-after'),
+      });
+      expect(delay).toBe(2000);
+    });
+
+    it('is a no-op when the hook is not provided', () => {
+      const delay = computeBackoffDelayMs(1, { jitter: false });
+      expect(delay).toBe(1000);
+    });
+  });
+
+  describe('decorrelated jitter strategy', () => {
+    it('derives the next delay from the previous delay and base with injected random', () => {
+      // AWS decorrelated jitter: next = min(maxMs, base + random * (prev * 3 - base))
+      // prev = 1000, base = 500, random = 0.5 => 500 + 0.5 * (3000 - 500) = 1750
+      const delay = computeBackoffDelayMs(1, {
+        jitterStrategy: 'decorrelated',
+        baseMs: 500,
+        previousDelayMs: 1000,
+        randomFn: () => 0.5,
+      });
+      expect(delay).toBe(1750);
+    });
+
+    it('uses baseMs as the previous delay when none is provided', () => {
+      // prev = base = 500, random = 0 => 500 + 0 * (1500 - 500) = 500
+      const delay = computeBackoffDelayMs(0, {
+        jitterStrategy: 'decorrelated',
+        baseMs: 500,
+        randomFn: () => 0,
+      });
+      expect(delay).toBe(500);
+    });
+
+    it('caps the decorrelated delay at maxMs', () => {
+      const delay = computeBackoffDelayMs(5, {
+        jitterStrategy: 'decorrelated',
+        baseMs: 500,
+        maxMs: 30000,
+        previousDelayMs: 20000,
+        randomFn: () => 0.9999,
+      });
+      expect(delay).toBe(30000);
+    });
+
+    it('never returns less than baseMs', () => {
+      const delay = computeBackoffDelayMs(3, {
+        jitterStrategy: 'decorrelated',
+        baseMs: 500,
+        previousDelayMs: 500,
+        randomFn: () => 0,
+      });
+      expect(delay).toBe(500);
+    });
+
+    it('is deterministic with a fixed randomFn across repeated calls', () => {
+      const opts = {
+        jitterStrategy: 'decorrelated' as const,
+        baseMs: 500,
+        previousDelayMs: 2000,
+        randomFn: () => 0.25,
+      };
+      // 500 + 0.25 * (6000 - 500) = 1875
+      expect(computeBackoffDelayMs(2, opts)).toBe(1875);
+      expect(computeBackoffDelayMs(2, opts)).toBe(1875);
+    });
+  });
 });
