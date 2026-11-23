@@ -15,5 +15,9 @@
     "typescript": "^5.5.4",
     "@types/node": "^20.14.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "files": [
+    "dist",
+    "src"
+  ]
 }

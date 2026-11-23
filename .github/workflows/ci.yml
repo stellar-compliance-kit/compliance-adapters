@@ -47,6 +47,10 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Bundle size budgets
+        # Fails if any package exceeds its size-limit budget (.size-limit.cjs).
+        run: npm run size
+
       - name: Unit Tests
         run: npm test -- --coverage
 
@@ -70,6 +74,29 @@ jobs:
 
       - name: Audit dependencies
         run: npm audit --audit-level=high
+
+  typecheck-examples-packed:
+    name: Typecheck Examples Against Published Types (Node 20)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages
+        run: npm run build
+
+      - name: Pack packages and typecheck examples
+        # Installs `npm pack` tarballs into a temp copy of each TS example so
+        # tsc sees the built .d.ts files, not workspace sources.
+        run: npm run typecheck:examples:packed
 
   test-sdk-compatibility:
     name: SDK Compatibility Tests (Stellar SDK ${{ matrix.stellar-sdk-version }})

@@ -18,5 +18,9 @@
     "@types/jest": "^29.5.12",
     "@types/node": "^20.14.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "files": [
+    "dist",
+    "src"
+  ]
 }
