@@ -3,21 +3,41 @@
  * SPDX-License-Identifier: MIT
  */
 
+/**
+ * horizon-listener — NOTE: despite the name, this package consumes Soroban RPC
+ * `getEvents`, not the Horizon REST/SSE API. Point it at a Soroban RPC endpoint.
+ * A rename (e.g. `@compliance-adapters/event-listener`) with a deprecation
+ * alias is tracked as a follow-up discussion.
+ */
+
 export { HorizonListener, type HorizonListenerOptions, type Logger } from './listener';
 export {
   RpcEventSource,
+  CursorOutOfRangeError,
+  toCursorOutOfRangeError,
   type EventSource,
   type RawContractEvent,
   type RpcEventSourceOptions,
+  type RpcEventType,
 } from './eventSource';
+export {
+  toJsonSafe,
+  decodeScValToJson,
+  decodeTopicToString,
+  type EventDecodeMode,
+  type JsonSafeValue,
+} from './decode';
 export {
   InMemoryDeadLetterQueue,
   FileDeadLetterQueue,
+  replayDeadLetterQueue,
   type DeadLetterEvent,
   type DeadLetterQueue,
+  type ReplayDeadLetterQueueOptions,
+  type ReplayDeadLetterQueueResult,
 } from './deadLetterQueue';
 export { computeBackoffDelayMs, type BackoffOptions } from '@compliance-adapters/backoff';
-export { HttpWebhookSender, WebhookHttpError, type WebhookSender, type HttpWebhookSenderOptions } from './webhook';
+export { HttpWebhookSender, WebhookHttpError, verifyWebhookSignature, type WebhookSender, type HttpWebhookSenderOptions } from './webhook';
 export { createWebhookForwarder, type WebhookForwarderOptions } from './factory';
 export {
   MetricsRegistry,
@@ -26,6 +46,7 @@ export {
   type Phase,
   type AnyMetricsRegistry,
   type Counter,
+  type Gauge,
   type Histogram,
   type Outcome,
   type MetricsRegistryOptions,
@@ -42,4 +63,5 @@ export {
   type SpanExporter,
   type TracingContext,
   type TracingOptions,
+  extractTraceContext,
 } from './tracing';

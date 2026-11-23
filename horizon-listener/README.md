@@ -1,5 +1,13 @@
 # horizon-listener
 
+> **Naming note:** despite its name, this package does **not** consume the
+> Horizon REST/SSE API. It polls **Soroban RPC `getEvents`** for contract
+> events (cursor-based polling, no persistent stream). Configure it with a
+> Soroban RPC URL (e.g. `STELLAR_RPC_URL=https://soroban-testnet.stellar.org`),
+> not a Horizon URL. A rename (e.g. to `@compliance-adapters/event-listener`
+> with this name kept as a deprecation alias) is tracked as a follow-up; see
+> the discussion linked from the issue tracker.
+
 An example/reference service that polls Soroban RPC for contract events emitted
 by the `denylist-gate` and `allowlist-token` contracts, logs them, and
 re-emits them to a webhook. Soroban RPC's `getEvents` is a cursor-based polling
@@ -132,6 +140,19 @@ app.post('/webhook', (req, res) => {
 });
 app.listen(4000);
 ```
+
+## Decoding events to native JS (`decode`)
+
+By default (`decode: 'none'`) `RpcEventSource` emits raw SDK values. Pass
+`decode: 'native'` to apply `scValToNative` to topics and value with JSON-safe
+encoding — bigint (e.g. `i128`) as a decimal string, bytes as hex, maps as
+plain objects — so webhook receivers don't need stellar-sdk:
+
+```ts
+const eventSource = new RpcEventSource({ rpcUrl, networkPassphrase, contractIds, startLedger, decode: 'native' });
+```
+
+Non-string topic segments are JSON-encoded so `topic` stays `string[]`.
 
 ## Polling mode vs stream mode
 
@@ -287,6 +308,41 @@ If `signingSecret` is omitted, `HttpWebhookSender` sends requests without
 `X-Timestamp` or `X-Signature` headers, exactly as before this feature was
 added.
 
+### Secret rotation runbook
+
+`signingSecret` also accepts an array. Every entry signs the request, and the
+signatures are sent comma-separated (`X-Signature: sha256=<new>,sha256=<old>`).
+Receivers can use the exported `verifyWebhookSignature(rawBody, timestamp,
+signatureHeader, secrets)` helper, which accepts a list of secrets.
+
+1. Receiver: accept both secrets, e.g. `verifyWebhookSignature(body, ts, sig, [NEW, OLD])`.
+2. Sender: switch to `signingSecret: [NEW, OLD]` (new is primary).
+3. Once all receivers trust `NEW`, set `signingSecret: NEW` on the sender.
+4. Receiver: drop `OLD` from its list.
+
+No delivery fails at any step, because there is always a signature the
+receiver accepts.
+
+## Idempotency-Key header
+
+Every delivery carries `Idempotency-Key: <event.id>`. The value is the same on
+every retry of one event, so receivers can deduplicate on it. Batched
+deliveries use a stable SHA-256-derived key over the batch's event ids.
+
+## Batched deliveries
+
+Batching is opt-in:
+
+```ts
+const sender = new HttpWebhookSender({ url, batchSize: 50, batchMaxWaitMs: 500 });
+```
+
+With `batchSize > 1`, events are buffered and POSTed as `{ "events": [...] }`
+when the buffer reaches `batchSize` or `batchMaxWaitMs` elapses. The signature
+covers the whole body and the batch is retried as a unit; each `send()`
+promise settles with its batch. Call `await sender.stop()` (or `flush()`) on
+shutdown to deliver any partial batch.
+
 ## Reconnect / backoff behavior
 
 If `eventSource.getEvents(...)` throws (RPC unreachable, rate-limited, cursor
@@ -399,6 +455,9 @@ The exported metric names are prefixed with the value from `prefix` (default:
 - `${prefix}_duration_ms_bucket{phase="...",le="..."}`
 - `${prefix}_duration_ms_sum{phase="..."}`
 - `${prefix}_duration_ms_count{phase="..."}`
+- `${prefix}_ledger_lag` — gauge: `latestLedger` from the latest `getEvents`
+  response minus the ledger of the last processed event (0 when caught up).
+  Updated on every successful poll; the main SLO signal for pipeline freshness.
 
 ### Scraping example
 
@@ -496,3 +555,31 @@ See `@compliance-adapters/tracing` for the full `SpanData` shape.
 - [`compliance-primitives`](https://github.com/stellar-compliance-kit/compliance-primitives) —
   the on-chain `denylist-gate` and `allowlist-token` Soroban contracts this
   package listens to events from.
+
+## Concurrent event processing
+
+```ts
+new HorizonListener({ eventSource, onEvent, concurrency: 8, orderingKey: 'contract' });
+```
+
+Events from different contracts run in parallel (up to `concurrency`); events from the same contract stay in order. The cursor advances only after the whole page is processed, and the next page isn't fetched until then (backpressure). Use `orderingKey: 'none'` to drop ordering entirely.
+
+## Webhook custom headers, mTLS and error bodies
+
+```ts
+import { readFileSync } from 'node:fs';
+
+new HttpWebhookSender({
+  url: 'https://receiver.example.com/hook',
+  headers: { 'X-Api-Key': process.env.API_KEY!, 'X-Tenant-Id': 'acme' },
+  tls: {
+    cert: readFileSync('client.crt'),
+    key: readFileSync('client.key'),
+    ca: readFileSync('ca.crt'),
+  },
+});
+```
+
+- `headers` are merged under the reserved `Content-Type`, `X-Signature`, `X-Timestamp` and `traceparent` headers, which can't be overridden.
+- `tls` requires the `undici` package (`npm i undici`); alternatively pass your own `dispatcher`.
+- Non-2xx response bodies are included in `WebhookHttpError` messages, capped at 2 KB with control characters stripped and a `…[truncated N chars]` marker.

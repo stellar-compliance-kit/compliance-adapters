@@ -110,7 +110,8 @@ describe('createSep10Middleware', () => {
       expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith({
         error: 'unauthorized',
-        reason: 'missing bearer token',
+        code: 'missing_token',
+        details: { reason: 'missing bearer token' },
       });
       expect(res.set).toHaveBeenCalledWith(
         'WWW-Authenticate',
@@ -153,7 +154,7 @@ describe('createSep10Middleware', () => {
     });
 
     it('sets error="invalid_token" when the address is revoked and uses the first home domain as realm', async () => {
-      jest.spyOn(verifyModule, 'verifyChallenge').mockReturnValue({
+      jest.spyOn(verifyModule, 'verifyChallenge').mockResolvedValue({
         valid: true,
         address: Keypair.random().publicKey(),
       });
@@ -188,7 +189,8 @@ describe('createSep10Middleware', () => {
       expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith({
         error: 'unauthorized',
-        reason: 'bearer token too large',
+        code: 'token_too_large',
+        details: { reason: 'bearer token too large' },
       });
       expect(next).not.toHaveBeenCalled();
     });
@@ -209,7 +211,8 @@ describe('createSep10Middleware', () => {
       expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith({
         error: 'unauthorized',
-        reason: 'bearer token too large',
+        code: 'token_too_large',
+        details: { reason: 'bearer token too large' },
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         'sep10-auth: bearer token exceeds maximum length',
@@ -226,7 +229,7 @@ describe('createSep10Middleware', () => {
 
     it('sets req.stellarAddress and calls next() on successful verification', async () => {
       const clientAddress = Keypair.random().publicKey();
-      jest.spyOn(verifyModule, 'verifyChallenge').mockReturnValue({
+      jest.spyOn(verifyModule, 'verifyChallenge').mockResolvedValue({
         valid: true,
         address: clientAddress,
       });
@@ -252,7 +255,7 @@ describe('createSep10Middleware', () => {
     });
 
     it('returns 401 when verifyChallenge returns valid: false', async () => {
-      jest.spyOn(verifyModule, 'verifyChallenge').mockReturnValue({
+      jest.spyOn(verifyModule, 'verifyChallenge').mockResolvedValue({
         valid: false,
         address: '',
         error: 'Transaction has expired',
@@ -272,7 +275,8 @@ describe('createSep10Middleware', () => {
       expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith({
         error: 'unauthorized',
-        reason: 'Transaction has expired',
+        code: 'invalid_token',
+        details: { reason: 'Transaction has expired' },
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         'sep10-auth: challenge verification failed',
@@ -286,7 +290,7 @@ describe('createSep10Middleware', () => {
     const clientAddress = Keypair.random().publicKey();
 
     beforeEach(() => {
-      jest.spyOn(verifyModule, 'verifyChallenge').mockReturnValue({
+      jest.spyOn(verifyModule, 'verifyChallenge').mockResolvedValue({
         valid: true,
         address: clientAddress,
       });
@@ -319,7 +323,8 @@ describe('createSep10Middleware', () => {
       expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith({
         error: 'unauthorized',
-        reason: 'address revoked',
+        code: 'token_revoked',
+        details: { reason: 'address revoked' },
       });
       expect(mockLogger.warn).toHaveBeenCalledWith(
         'sep10-auth: address is revoked',
@@ -384,7 +389,7 @@ describe('createSep10Middleware', () => {
       const jti = 'token-jti-1';
 
       beforeEach(() => {
-        jest.spyOn(verifyModule, 'verifyChallenge').mockReturnValue({
+        jest.spyOn(verifyModule, 'verifyChallenge').mockResolvedValue({
           valid: true,
           address: clientAddress,
           jti,
@@ -408,7 +413,7 @@ describe('createSep10Middleware', () => {
 
         expect(mockStore.isTokenRevoked).toHaveBeenCalledWith(jti);
         expect(res.status).toHaveBeenCalledWith(401);
-        expect(res.json).toHaveBeenCalledWith({ error: 'unauthorized', reason: 'token revoked' });
+        expect(res.json).toHaveBeenCalledWith({ error: 'unauthorized', code: 'token_revoked', details: { reason: 'token revoked' } });
         expect(next).not.toHaveBeenCalled();
       });
 
@@ -445,7 +450,7 @@ describe('createSep10Middleware', () => {
 
         await middleware(makeReq('Bearer some-xdr'), res, next);
 
-        expect(res.json).toHaveBeenCalledWith({ error: 'unauthorized', reason: 'address revoked' });
+        expect(res.json).toHaveBeenCalledWith({ error: 'unauthorized', code: 'token_revoked', details: { reason: 'address revoked' } });
         expect(mockStore.isTokenRevoked).not.toHaveBeenCalled();
       });
 
@@ -556,7 +561,7 @@ describe('createSep10Middleware - custom token extractor (#772)', () => {
   it('uses the custom extractor instead of the Authorization header', async () => {
     const spy = jest
       .spyOn(verifyModule, 'verifyChallenge')
-      .mockReturnValue({ valid: true, address: 'GCLIENT' });
+      .mockResolvedValue({ valid: true, address: 'GCLIENT' });
     const getToken = jest.fn().mockReturnValue('cookie-token');
     const middleware = createSep10Middleware({ ...options, getToken });
     const req = makeReq(undefined);
@@ -584,7 +589,7 @@ describe('createSep10Middleware - custom token extractor (#772)', () => {
   it('keeps parsing the Bearer header when no extractor is provided', async () => {
     const spy = jest
       .spyOn(verifyModule, 'verifyChallenge')
-      .mockReturnValue({ valid: true, address: 'GCLIENT' });
+      .mockResolvedValue({ valid: true, address: 'GCLIENT' });
     const next = jest.fn();
 
     await createSep10Middleware(options)(makeReq('Bearer abc'), makeRes(), next as unknown as NextFunction);

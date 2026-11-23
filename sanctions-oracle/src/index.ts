@@ -3,9 +3,9 @@
  * SPDX-License-Identifier: MIT
  */
 
-export { SanctionsProvider } from './SanctionsProvider';
+export { SanctionsProvider, CheckResult } from './SanctionsProvider';
 export { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from './mockProvider';
-export { CsvSanctionsProvider } from './csvProvider';
+export { CsvSanctionsProvider, parseCsv } from './csvProvider';
 export {
   syncSanctionsToDenylist,
   createRpcDenylistWriter,
@@ -20,8 +20,14 @@ export {
   RpcDenylistWriterOptions,
   CliArgs,
   toSafeLogString,
+  createRpcFeeEstimator,
+  stroopsToXlm,
+  ReviewAddress,
+  FeeEstimate,
+  RpcFeeEstimatorOptions,
 } from './sync';
-export { SyncCheckpointStore, InMemoryCheckpointStore } from './checkpoint';
+export { SyncCheckpointStore, InMemoryCheckpointStore, FileCheckpointStore } from './checkpoint';
+export { createJsonlAuditLogger, JsonlAuditLoggerOptions } from './auditLog';
 export { withRetry, RetryOptions } from './retry';
 export {
   ProviderRegistry,
@@ -58,6 +64,7 @@ export {
   type SpanExporter,
   type TracingContext,
   type TracingOptions,
+  extractTraceContext,
 } from './tracing';
 export { RateLimitedSanctionsProvider, RateLimitOptions } from './rateLimitedProvider';
 export { RestSanctionsProvider } from './restProvider';
