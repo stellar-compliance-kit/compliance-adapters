@@ -434,6 +434,62 @@ This output is intentionally Prometheus-compatible, so it can be scraped by a
 standard `/metrics` endpoint or by a sidecar collector in a long-running
 operator environment.
 
+## Distributed tracing
+
+`horizon-listener` ships an OpenTelemetry-compatible tracer (`DefaultTracer`,
+re-exported from `@compliance-adapters/tracing`). Tracing is **off by default**:
+when no `tracer` option is passed, a `NoopTracer` is used with zero overhead.
+
+### Enabling tracing
+
+Pass a `DefaultTracer` via the `tracer` option on `HorizonListener` (and
+`HttpWebhookSender`):
+
+```ts
+import { DefaultTracer, HorizonListener, HttpWebhookSender } from 'horizon-listener';
+
+const tracer = new DefaultTracer({
+  serviceName: 'horizon-listener',
+  exporter: async (span) => { await otlpExporter.export(span); },
+  sampler: (name) => name !== 'rpc_poll', // optional; default samples everything
+  // redactPayload: true (default)
+});
+
+const listener = new HorizonListener({ eventSource, onEvent, tracer });
+const sender = new HttpWebhookSender({ url, signingSecret, tracer });
+```
+
+### Span hierarchy
+
+| Span          | Created around                         | Parent        |
+| ------------- | -------------------------------------- | ------------- |
+| `rpc_poll`    | each `eventSource.getEvents()` call    | root          |
+| `event_relay` | each `onEvent` handler invocation      | `rpc_poll`    |
+| `webhook`     | each `WebhookSender.send()` call       | `parentContext` (e.g. `event_relay`) |
+
+Pass a `parentContext` (`TracingContext`) to `HttpWebhookSender` to nest webhook
+spans under an existing trace. Outbound webhook requests carry a W3C
+`traceparent` header so downstream services can continue the same trace.
+
+### Options
+
+| Option          | Default        | Description |
+| --------------- | -------------- | ----------- |
+| `exporter`      | none           | Called with each completed `SpanData`; forward to any OTLP/Jaeger/Zipkin exporter. Without it spans are discarded. |
+| `sampler`       | `() => true`   | Predicate on span name; return `true` to record the span. |
+| `redactPayload` | `true`         | Event/payload data is **not** attached to spans unless explicitly set to `false`. |
+| `onExportError` | none           | Called when the exporter throws; errors never propagate into the listener. |
+| `serviceName`   | none           | Added as the `service.name` attribute on every span. |
+
+Call `await tracer.shutdown()` during graceful shutdown to flush pending exports.
+
+### Bridging to an OTLP exporter
+
+`DefaultTracer` has no hard dependency on the OpenTelemetry SDK. Bridge to a real
+pipeline by supplying an `exporter` callback that converts each `SpanData` and
+forwards it to your SDK exporter (e.g. `@opentelemetry/exporter-trace-otlp-http`).
+See `@compliance-adapters/tracing` for the full `SpanData` shape.
+
 ## Links
 
 - [Root README](../README.md)
