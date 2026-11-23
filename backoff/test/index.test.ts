@@ -137,4 +137,22 @@ describe('computeBackoffDelayMs', () => {
     expect(() => computeBackoffDelayMs(-1)).toThrow(RangeError);
     expect(() => computeBackoffDelayMs(Infinity)).toThrow(RangeError);
   });
+
+  it('throws RangeError for invalid baseMs and maxMs values', () => {
+    for (const invalid of [-1, -100, NaN, Infinity, -Infinity]) {
+      expect(() => computeBackoffDelayMs(0, { baseMs: invalid })).toThrow(RangeError);
+      expect(() => computeBackoffDelayMs(0, { maxMs: invalid })).toThrow(RangeError);
+    }
+  });
+
+  it('throws RangeError for invalid jitterMin/jitterMax values or jitterMin > jitterMax', () => {
+    for (const invalid of [-0.1, NaN, Infinity, -Infinity]) {
+      expect(() => computeBackoffDelayMs(0, { jitterMin: invalid })).toThrow(RangeError);
+      expect(() => computeBackoffDelayMs(0, { jitterMax: invalid })).toThrow(RangeError);
+    }
+    expect(() => computeBackoffDelayMs(0, { jitterMin: 0.8, jitterMax: 0.4 })).toThrow(RangeError);
+    expect(() =>
+      computeBackoffDelayMs(0, { jitter: false, jitterMin: 0.9, jitterMax: 0.2 }),
+    ).toThrow(RangeError);
+  });
 });

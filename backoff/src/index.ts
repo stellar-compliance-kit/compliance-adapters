@@ -80,17 +80,44 @@ export function computeBackoffDelayMs(attempt: number, options: BackoffOptions =
   const jitter = options.jitter ?? true;
   const randomFn = options.randomFn ?? Math.random;
 
-  const uncapped = baseMs * 2 ** attempt;
-  const capped = Math.min(maxMs, uncapped);
-
-  if (!jitter || options.jitterStrategy === 'none') {
-    return capped;
+  if (!Number.isFinite(baseMs) || baseMs < 0) {
+    throw new RangeError(
+      `computeBackoffDelayMs: baseMs must be a non-negative finite number, received ${baseMs}`,
+    );
+  }
+  if (!Number.isFinite(maxMs) || maxMs < 0) {
+    throw new RangeError(
+      `computeBackoffDelayMs: maxMs must be a non-negative finite number, received ${maxMs}`,
+    );
   }
 
   const defaultMin = options.jitterStrategy === 'full' ? 0 : 0.5;
   const defaultMax = 1;
   const min = options.jitterMin ?? defaultMin;
   const max = options.jitterMax ?? defaultMax;
+
+  if (!Number.isFinite(min) || min < 0) {
+    throw new RangeError(
+      `computeBackoffDelayMs: jitterMin must be a non-negative finite number, received ${min}`,
+    );
+  }
+  if (!Number.isFinite(max) || max < 0) {
+    throw new RangeError(
+      `computeBackoffDelayMs: jitterMax must be a non-negative finite number, received ${max}`,
+    );
+  }
+  if (min > max) {
+    throw new RangeError(
+      `computeBackoffDelayMs: jitterMin (${min}) must be less than or equal to jitterMax (${max})`,
+    );
+  }
+
+  const uncapped = baseMs * 2 ** attempt;
+  const capped = Math.min(maxMs, uncapped);
+
+  if (!jitter || options.jitterStrategy === 'none') {
+    return capped;
+  }
 
   const jitterFactor = min + randomFn() * (max - min);
   return capped * jitterFactor;
