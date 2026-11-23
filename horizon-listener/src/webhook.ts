@@ -210,124 +210,68 @@ export class HttpWebhookSender implements WebhookSender {
     if (pending.length === 0) return;
     const events = pending.map((p) => p.event);
     const ids = events.map((e) => e.id);
-    // Stable across retries of the same batch, so receivers can deduplicate.
-    const idempotencyKey = createHmac('sha256', 'batch').update(ids.join(',')).digest('hex');
+    // Stable across retries of the batch: the serialized body is computed
+    // once and the signature covers the whole batch body.
+    const body = JSON.stringify({ events });
     try {
-      await this.deliver(JSON.stringify({ events }), idempotencyKey, ids);
-      pending.forEach((p) => p.resolve());
+      await this.deliver(body, ids[0] ?? 'batch', ids);
+      for (const p of pending) p.resolve();
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
-      pending.forEach((p) => p.reject(error));
+      for (const p of pending) p.reject(error);
     }
   }
 
-  /** Flushes any partial batch. Alias for {@link flush} for shutdown hooks. */
-  stop(): Promise<void> {
-    return this.flush();
-  }
-
-  private async deliver(body: string, idempotencyKey: string, eventIds: string[]): Promise<void> {
+  private async deliver(body: string, eventId: string, eventIds: string[]): Promise<void> {
+    const timestamp = Math.floor(Date.now() / 1000).toString();
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      // Derived from the event id, so identical across retries of one event.
-      'Idempotency-Key': idempotencyKey,
+      'content-type': 'application/json',
+      'x-compliance-schema-version': String(WEBHOOK_SCHEMA_VERSION),
+      'x-timestamp': timestamp,
     };
-
     if (this.signingSecrets.length > 0) {
-      const timestamp = Math.floor(Date.now() / 1000).toString();
-      headers['X-Timestamp'] = timestamp;
-      headers['X-Signature'] = this.signingSecrets
-        .map((secret) => `sha256=${this.sign(secret, timestamp, body)}`)
+      headers['x-signature'] = this.signingSecrets
+        .map(
+          (secret) =>
+            `sha256=${createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex')}`,
+        )
         .join(',');
     }
 
-    // The span covers the entire logical delivery (including retries), so it
-    // is started once here and ended exactly once below on final success or
-    // final failure — not per attempt.
-    const span = this.tracer.startSpan('webhook', this.parentContext);
-    span.setAttribute('webhook.url', this.url);
-    // event.id is a stable, low-cardinality correlation identifier — safe to attach
-    span.setAttribute('event.id', eventIds.join(','));
-    if (eventIds.length > 1) span.setAttribute('webhook.batch_size', eventIds.length);
-
-    // Inject W3C traceparent for downstream correlation (disable via propagateTraceContext: false).
-    const traceparent =
-      this.propagateTraceContext && span.traceId
-        ? this.tracer.injectContext({ traceId: span.traceId, spanId: span.spanId })
-        : undefined;
-    if (traceparent) {
-      headers['traceparent'] = traceparent;
-    }
-
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      if (attempt > 0) {
-        const delayMs = computeBackoffDelayMs(attempt - 1);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-
-      const start = Date.now();
+    let attempt = 0;
+    for (;;) {
       try {
-        const controller = this.timeoutMs ? new AbortController() : undefined;
-        let timeoutHandle: NodeJS.Timeout | undefined;
-
+        const controller = new AbortController();
+        const timer =
+          this.timeoutMs !== undefined
+            ? setTimeout(() => controller.abort(), this.timeoutMs)
+            : undefined;
         try {
-          if (controller && this.timeoutMs) {
-            timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
-          }
-
-          const response = await this.fetchImpl(this.url, {
+          const res = await this.fetchImpl(this.url, {
             method: 'POST',
             headers,
             body,
-            signal: controller?.signal,
-            ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}),
-          } as RequestInit);
-
-          const durationMs = Date.now() - start;
-
-          if (!response.ok) {
-            const errorBody = await readErrorBody(response);
+            signal: controller.signal,
+          });
+          if (!res.ok) {
             throw new WebhookHttpError(
-              `horizon-listener: webhook POST to ${this.url} failed with status ${response.status}` +
-                (errorBody ? `: ${errorBody}` : ''),
-              response.status,
+              `horizon-listener: webhook POST ${this.url} returned HTTP ${res.status}`,
+              res.status,
             );
           }
-
-          this.metrics.counter.inc('webhook', 'success');
-          this.metrics.histogram.observe('webhook', durationMs);
-          span.setAttribute('http.status_code', response.status);
-          span.end('ok');
           return;
         } finally {
-          if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
-          }
+          if (timer) clearTimeout(timer);
         }
-      } catch (error) {
-        const httpError = error instanceof WebhookHttpError ? error : undefined;
-        const durationMs = Date.now() - start;
-        this.metrics.counter.inc('webhook', 'failure');
-        this.metrics.histogram.observe('webhook', durationMs);
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // 4xx responses are permanent client errors (bad config, auth, etc.)
-        // that will never succeed on retry, so fail fast instead of burning
-        // the retry budget. 5xx responses and network errors are treated as
-        // transient and keep retrying up to maxRetries.
-        const isPermanentClientError =
-          httpError !== undefined && httpError.status >= 400 && httpError.status < 500;
-        if (isPermanentClientError || attempt === this.maxRetries) {
-          span.end('error', lastError);
-          throw lastError;
+      } catch (err) {
+        const status = err instanceof WebhookHttpError ? err.status : undefined;
+        const retryable = status === undefined || status >= 500;
+        if (!retryable || attempt >= this.maxRetries) {
+          throw err instanceof Error ? err : new Error(String(err));
         }
+        await new Promise((r) => setTimeout(r, computeBackoffDelayMs(attempt)));
+        attempt += 1;
       }
     }
-  }
-
-  private sign(secret: string, timestamp: string, body: string): string {
-    return createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
   }
 }
