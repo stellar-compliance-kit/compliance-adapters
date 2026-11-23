@@ -1,0 +1,57 @@
+name: Mutation Testing (sep10-auth)
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+jobs:
+  stryker-sep10-auth:
+    name: Stryker (sep10-auth)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Install Stryker
+        run: npm install --no-save @stryker-mutator/core @stryker-mutator/jest-runner @stryker-mutator/typescript-checker
+
+      - name: Run Stryker
+        working-directory: sep10-auth
+        run: npx stryker run
+
+      - name: Report mutation score
+        if: always()
+        working-directory: sep10-auth
+        run: |
+          node -e '
+            const r = require("./reports/mutation/mutation.json");
+            let killed = 0, total = 0;
+            for (const f of Object.values(r.files)) for (const m of f.mutants) {
+              if (["Ignored","CompileError","RuntimeError"].includes(m.status)) continue;
+              total++; if (["Killed","Timeout"].includes(m.status)) killed++;
+            }
+            const score = total ? (100 * killed / total).toFixed(2) : "n/a";
+            console.log(`Mutation score: ${score}%`);
+            require("fs").appendFileSync(process.env.GITHUB_STEP_SUMMARY,
+              `### sep10-auth mutation score: ${score}% (${killed}/${total})\n`);
+          '
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sep10-auth-mutation-report
+          path: sep10-auth/reports/mutation/

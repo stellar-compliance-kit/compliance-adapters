@@ -59,6 +59,18 @@ jobs:
         if: always()
         run: node scripts/report-coverage.js
 
+      - name: Upload coverage to Codecov (per-package flags)
+        if: always() && matrix.node-version == '22.x'
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+        run: |
+          pip install --quiet codecov-cli
+          for f in */coverage/lcov.info examples/*/coverage/lcov.info; do
+            [ -f "$f" ] || continue
+            flag=$(echo "${f%/coverage/lcov.info}" | tr '/' '-')
+            codecovcli upload-process --fail-on-error=false -f "$f" -F "$flag" -n "$flag" || true
+          done
+
       - name: Upload Coverage Artifacts
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -70,6 +82,31 @@ jobs:
 
       - name: Audit dependencies
         run: npm audit --audit-level=high
+
+  test-cli-cross-platform:
+    name: CLI Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: CLI Wrapper Integration Tests
+        run: npm run test:cli
 
   test-sdk-compatibility:
     name: SDK Compatibility Tests (Stellar SDK ${{ matrix.stellar-sdk-version }})
