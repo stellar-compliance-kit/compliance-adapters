@@ -37,7 +37,15 @@ export {
   type ReplayDeadLetterQueueResult,
 } from './deadLetterQueue';
 export { computeBackoffDelayMs, type BackoffOptions } from '@compliance-adapters/backoff';
-export { HttpWebhookSender, WebhookHttpError, verifyWebhookSignature, type WebhookSender, type HttpWebhookSenderOptions } from './webhook';
+export {
+  HttpWebhookSender,
+  WebhookHttpError,
+  verifyWebhookSignature,
+  DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
+  type WebhookSender,
+  type HttpWebhookSenderOptions,
+  type VerifyWebhookSignatureOptions,
+} from './webhook';
 export { createWebhookForwarder, type WebhookForwarderOptions } from './factory';
 export {
   MetricsRegistry,

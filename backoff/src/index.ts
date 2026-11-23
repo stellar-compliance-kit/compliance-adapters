@@ -65,6 +65,14 @@ function createAbortError(): Error {
   return err;
 }
 
+function assertNonNegativeFinite(name: string, value: number): void {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new RangeError(
+      `computeBackoffDelayMs: ${name} must be a non-negative finite number, received ${value}`,
+    );
+  }
+}
+
 // randomFn is injectable (defaulting to Math.random) so tests can assert an
 // exact delay instead of a range, and so callers can disable jitter entirely
 // for deterministic timing assertions.
@@ -80,17 +88,28 @@ export function computeBackoffDelayMs(attempt: number, options: BackoffOptions =
   const jitter = options.jitter ?? true;
   const randomFn = options.randomFn ?? Math.random;
 
+  assertNonNegativeFinite('baseMs', baseMs);
+  assertNonNegativeFinite('maxMs', maxMs);
+
+  const defaultMin = options.jitterStrategy === 'full' ? 0 : 0.5;
+  const defaultMax = 1;
+  const min = options.jitterMin ?? defaultMin;
+  const max = options.jitterMax ?? defaultMax;
+
+  assertNonNegativeFinite('jitterMin', min);
+  assertNonNegativeFinite('jitterMax', max);
+  if (min > max) {
+    throw new RangeError(
+      `computeBackoffDelayMs: jitterMin (${min}) must not be greater than jitterMax (${max})`,
+    );
+  }
+
   const uncapped = baseMs * 2 ** attempt;
   const capped = Math.min(maxMs, uncapped);
 
   if (!jitter || options.jitterStrategy === 'none') {
     return capped;
   }
-
-  const defaultMin = options.jitterStrategy === 'full' ? 0 : 0.5;
-  const defaultMax = 1;
-  const min = options.jitterMin ?? defaultMin;
-  const max = options.jitterMax ?? defaultMax;
 
   const jitterFactor = min + randomFn() * (max - min);
   return capped * jitterFactor;

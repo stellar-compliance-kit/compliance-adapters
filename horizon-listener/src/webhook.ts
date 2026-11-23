@@ -100,17 +100,35 @@ export interface HttpWebhookSenderOptions {
 }
 
 /**
+ * Default freshness window (in seconds) applied by
+ * {@link verifyWebhookSignature} when no `toleranceSeconds` is supplied.
+ */
+export const DEFAULT_WEBHOOK_TOLERANCE_SECONDS = 300;
+
+/**
  * Verifies an `X-Signature` header produced by {@link HttpWebhookSender}
  * against one or more secrets. Returns true when any signature in the header
  * matches any secret, so receivers can accept both old and new secrets
- * during a rotation window. Does not check timestamp freshness.
+ * during a rotation window.
+ *
+ * The `X-Timestamp` header is also checked for freshness: timestamps older
+ * than `toleranceSeconds` (stale/replayed) or further in the future than
+ * `toleranceSeconds` (clock skew / forged) are rejected. Pass
+ * `toleranceSeconds: 0` to disable the freshness check entirely.
  */
 export function verifyWebhookSignature(
   rawBody: string | Buffer,
   timestamp: string,
   signatureHeader: string,
   secrets: string | string[],
+  toleranceSeconds: number = DEFAULT_WEBHOOK_TOLERANCE_SECONDS,
 ): boolean {
+  if (toleranceSeconds > 0) {
+    const ts = Number(timestamp);
+    if (!Number.isFinite(ts)) return false;
+    const nowSeconds = Date.now() / 1000;
+    if (Math.abs(nowSeconds - ts) > toleranceSeconds) return false;
+  }
   const provided = signatureHeader.split(',').map((s) => Buffer.from(s.trim()));
   const material = Buffer.concat([Buffer.from(`${timestamp}.`), Buffer.from(rawBody)]);
   return (Array.isArray(secrets) ? secrets : [secrets]).some((secret) => {
@@ -210,124 +228,6 @@ export class HttpWebhookSender implements WebhookSender {
     if (pending.length === 0) return;
     const events = pending.map((p) => p.event);
     const ids = events.map((e) => e.id);
-    // Stable across retries of the same batch, so receivers can deduplicate.
-    const idempotencyKey = createHmac('sha256', 'batch').update(ids.join(',')).digest('hex');
-    try {
-      await this.deliver(JSON.stringify({ events }), idempotencyKey, ids);
-      pending.forEach((p) => p.resolve());
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      pending.forEach((p) => p.reject(error));
-    }
-  }
+    // Stable across retries of the 
 
-  /** Flushes any partial batch. Alias for {@link flush} for shutdown hooks. */
-  stop(): Promise<void> {
-    return this.flush();
-  }
-
-  private async deliver(body: string, idempotencyKey: string, eventIds: string[]): Promise<void> {
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      // Derived from the event id, so identical across retries of one event.
-      'Idempotency-Key': idempotencyKey,
-    };
-
-    if (this.signingSecrets.length > 0) {
-      const timestamp = Math.floor(Date.now() / 1000).toString();
-      headers['X-Timestamp'] = timestamp;
-      headers['X-Signature'] = this.signingSecrets
-        .map((secret) => `sha256=${this.sign(secret, timestamp, body)}`)
-        .join(',');
-    }
-
-    // The span covers the entire logical delivery (including retries), so it
-    // is started once here and ended exactly once below on final success or
-    // final failure — not per attempt.
-    const span = this.tracer.startSpan('webhook', this.parentContext);
-    span.setAttribute('webhook.url', this.url);
-    // event.id is a stable, low-cardinality correlation identifier — safe to attach
-    span.setAttribute('event.id', eventIds.join(','));
-    if (eventIds.length > 1) span.setAttribute('webhook.batch_size', eventIds.length);
-
-    // Inject W3C traceparent for downstream correlation (disable via propagateTraceContext: false).
-    const traceparent =
-      this.propagateTraceContext && span.traceId
-        ? this.tracer.injectContext({ traceId: span.traceId, spanId: span.spanId })
-        : undefined;
-    if (traceparent) {
-      headers['traceparent'] = traceparent;
-    }
-
-    let lastError: Error | undefined;
-
-    for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
-      if (attempt > 0) {
-        const delayMs = computeBackoffDelayMs(attempt - 1);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
-      }
-
-      const start = Date.now();
-      try {
-        const controller = this.timeoutMs ? new AbortController() : undefined;
-        let timeoutHandle: NodeJS.Timeout | undefined;
-
-        try {
-          if (controller && this.timeoutMs) {
-            timeoutHandle = setTimeout(() => controller.abort(), this.timeoutMs);
-          }
-
-          const response = await this.fetchImpl(this.url, {
-            method: 'POST',
-            headers,
-            body,
-            signal: controller?.signal,
-            ...(this.dispatcher ? { dispatcher: this.dispatcher } : {}),
-          } as RequestInit);
-
-          const durationMs = Date.now() - start;
-
-          if (!response.ok) {
-            const errorBody = await readErrorBody(response);
-            throw new WebhookHttpError(
-              `horizon-listener: webhook POST to ${this.url} failed with status ${response.status}` +
-                (errorBody ? `: ${errorBody}` : ''),
-              response.status,
-            );
-          }
-
-          this.metrics.counter.inc('webhook', 'success');
-          this.metrics.histogram.observe('webhook', durationMs);
-          span.setAttribute('http.status_code', response.status);
-          span.end('ok');
-          return;
-        } finally {
-          if (timeoutHandle) {
-            clearTimeout(timeoutHandle);
-          }
-        }
-      } catch (error) {
-        const httpError = error instanceof WebhookHttpError ? error : undefined;
-        const durationMs = Date.now() - start;
-        this.metrics.counter.inc('webhook', 'failure');
-        this.metrics.histogram.observe('webhook', durationMs);
-        lastError = error instanceof Error ? error : new Error(String(error));
-
-        // 4xx responses are permanent client errors (bad config, auth, etc.)
-        // that will never succeed on retry, so fail fast instead of burning
-        // the retry budget. 5xx responses and network errors are treated as
-        // transient and keep retrying up to maxRetries.
-        const isPermanentClientError =
-          httpError !== undefined && httpError.status >= 400 && httpError.status < 500;
-        if (isPermanentClientError || attempt === this.maxRetries) {
-          span.end('error', lastError);
-          throw lastError;
-        }
-      }
-    }
-  }
-
-  private sign(secret: string, timestamp: string, body: string): string {
-    return createHmac('sha256', secret).update(`${timestamp}.${body}`).digest('hex');
-  }
-}
+/* … truncated 4775 chars — edit only what you need near the top … */

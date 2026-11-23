@@ -137,4 +137,38 @@ describe('computeBackoffDelayMs', () => {
     expect(() => computeBackoffDelayMs(-1)).toThrow(RangeError);
     expect(() => computeBackoffDelayMs(Infinity)).toThrow(RangeError);
   });
+
+  describe('option validation', () => {
+    it('throws RangeError for negative or NaN baseMs', () => {
+      expect(() => computeBackoffDelayMs(1, { baseMs: -1 })).toThrow(RangeError);
+      expect(() => computeBackoffDelayMs(1, { baseMs: NaN })).toThrow(RangeError);
+    });
+
+    it('throws RangeError for negative or NaN maxMs', () => {
+      expect(() => computeBackoffDelayMs(1, { maxMs: -1 })).toThrow(RangeError);
+      expect(() => computeBackoffDelayMs(1, { maxMs: NaN })).toThrow(RangeError);
+    });
+
+    it('throws RangeError for negative or NaN jitterMin', () => {
+      expect(() => computeBackoffDelayMs(1, { jitterMin: -0.1 })).toThrow(RangeError);
+      expect(() => computeBackoffDelayMs(1, { jitterMin: NaN })).toThrow(RangeError);
+    });
+
+    it('throws RangeError for negative or NaN jitterMax', () => {
+      expect(() => computeBackoffDelayMs(1, { jitterMax: -0.1 })).toThrow(RangeError);
+      expect(() => computeBackoffDelayMs(1, { jitterMax: NaN })).toThrow(RangeError);
+    });
+
+    it('throws RangeError when jitterMin > jitterMax', () => {
+      expect(() => computeBackoffDelayMs(1, { jitterMin: 0.9, jitterMax: 0.5 })).toThrow(
+        RangeError,
+      );
+    });
+
+    it('accepts valid option combinations', () => {
+      expect(() =>
+        computeBackoffDelayMs(1, { baseMs: 100, maxMs: 5000, jitterMin: 0.5, jitterMax: 1 }),
+      ).not.toThrow();
+    });
+  });
 });
