@@ -1,0 +1,23 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "compliance-adapters",
+  "entryPointStrategy": "packages",
+  "entryPoints": [
+    "backoff",
+    "logger",
+    "shared",
+    "tracing-types",
+    "metrics",
+    "tracing",
+    "sep10-auth",
+    "sanctions-oracle",
+    "horizon-listener"
+  ],
+  "packageOptions": {
+    "entryPoints": ["src/index.ts"],
+    "tsconfig": "tsconfig.json"
+  },
+  "out": "docs/api",
+  "readme": "README.md",
+  "skipErrorChecking": true
+}

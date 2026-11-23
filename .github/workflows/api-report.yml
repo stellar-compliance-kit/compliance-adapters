@@ -1,0 +1,22 @@
+name: API Report
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  api-extractor:
+    name: Public API surface check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+      - run: npm ci
+      # Fails if any package's public API differs from its committed etc/*.api.md report.
+      # Run `npm run api:update` locally and commit the updated reports to acknowledge changes.
+      - run: npm run api:check
