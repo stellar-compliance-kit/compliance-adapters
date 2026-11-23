@@ -163,6 +163,33 @@ repeating the code.
 - Prefer small, focused functions and explicit types on exported APIs.
 - Don't vendor `compliance-primitives` contract code here — reference it as a dependency/link.
 
+## Commit message conventions
+
+Use [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>(<optional scope>): <short imperative summary>
+
+<optional body>
+
+<optional footer, e.g. "Closes #123" or "BREAKING CHANGE: ...">
+```
+
+- **Types:** `feat`, `fix`, `docs`, `chore`, `refactor`, `perf`, `test`, `ci`, `build`, `revert`.
+- **Scope:** the affected package or area, e.g. `horizon-listener`, `sanctions-oracle`, `sep10-auth`, `ci`.
+- Keep the summary under ~72 characters, lowercase, with no trailing period.
+- Mark breaking changes with `!` after the type/scope (e.g. `feat(tracing)!: ...`) or a `BREAKING CHANGE:` footer.
+
+Examples:
+
+```
+feat(horizon-listener): add stream-mode reconnect jitter
+fix(sanctions-oracle): handle empty OFAC response
+docs: document commit message conventions
+```
+
+Maintainers may enforce this with `commitlint` (`@commitlint/config-conventional`) in CI.
+
 ## Branch protection and required status checks
 
 The `main` branch has branch protection enabled. **The CI workflow must be green before any PR
