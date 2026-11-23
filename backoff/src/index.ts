@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: MIT
  */
 
-export type JitterStrategy = 'half' | 'full' | 'none';
+export type JitterStrategy = 'half' | 'full' | 'none' | 'decorrelated';
 
 export interface BackoffOptions {
   baseMs?: number;
@@ -13,6 +13,11 @@ export interface BackoffOptions {
   jitterStrategy?: JitterStrategy;
   jitterMin?: number;
   jitterMax?: number;
+  /**
+   * Previous (already-jittered) delay in ms, used by the `decorrelated`
+   * strategy to derive the next delay. Defaults to `baseMs` when omitted.
+   */
+  prevDelayMs?: number;
 }
 
 export interface RetryWithBackoffOptions extends BackoffOptions {
@@ -87,12 +92,22 @@ export function computeBackoffDelayMs(attempt: number, options: BackoffOptions =
   const jitter = options.jitter ?? true;
   const randomFn = options.randomFn ?? Math.random;
 
+  if (!jitter || options.jitterStrategy === 'none') {
+    return Math.min(maxMs, baseMs * 2 ** attempt);
+  }
+
+  // AWS-style decorrelated jitter: next delay is derived from the previous
+  // delay rather than the attempt index, spreading retries out under
+  // contention. Formula: min(maxMs, random(baseMs, prevDelay * 3)).
+  if (options.jitterStrategy === 'decorrelated') {
+    const prevDelayMs = options.prevDelayMs ?? baseMs;
+    const upper = Math.max(baseMs, prevDelayMs * 3);
+    const delay = baseMs + randomFn() * (upper - baseMs);
+    return Math.min(maxMs, delay);
+  }
+
   const uncapped = baseMs * 2 ** attempt;
   const capped = Math.min(maxMs, uncapped);
-
-  if (!jitter || options.jitterStrategy === 'none') {
-    return capped;
-  }
 
   const defaultMin = options.jitterStrategy === 'full' ? 0 : 0.5;
   const defaultMax = 1;
@@ -142,6 +157,8 @@ export async function retryWithBackoff<T>(
   const shouldRetry = options.shouldRetry ?? (() => true);
   const sleepFn = options.sleepFn ?? ((ms: number) => defaultSleep(ms, options.signal));
   const getRetryAfterMs = options.getRetryAfterMs;
+  const isDecorrelated = options.jitterStrategy === 'decorrelated';
+  let prevDelayMs = options.prevDelayMs;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     if (options.signal?.aborted) {
@@ -156,7 +173,7 @@ export async function retryWithBackoff<T>(
         throw err;
       }
 
-      let delay = computeBackoffDelayMs(attempt, options);
+      let delay = computeBackoffDelayMs(attempt, { ...options, prevDelayMs });
       if (getRetryAfterMs) {
         const retryAfterMs = getRetryAfterMs(err);
         if (
@@ -167,6 +184,9 @@ export async function retryWithBackoff<T>(
         ) {
           delay = retryAfterMs;
         }
+      }
+      if (isDecorrelated) {
+        prevDelayMs = delay;
       }
       await sleepFn(delay);
     }

@@ -173,4 +173,61 @@ describe('computeBackoffDelayMs', () => {
       expect(delay).toBe(1000);
     });
   });
+
+  describe('decorrelated jitter strategy', () => {
+    it('derives the next delay from the previous delay and base with injected random', () => {
+      // AWS decorrelated jitter: next = min(maxMs, base + random * (prev * 3 - base))
+      // prev = 1000, base = 500, random = 0.5 => 500 + 0.5 * (3000 - 500) = 1750
+      const delay = computeBackoffDelayMs(1, {
+        jitterStrategy: 'decorrelated',
+        baseMs: 500,
+        previousDelayMs: 1000,
+        randomFn: () => 0.5,
+      });
+      expect(delay).toBe(1750);
+    });
+
+    it('uses baseMs as the previous delay when none is provided', () => {
+      // prev = base = 500, random = 0 => 500 + 0 * (1500 - 500) = 500
+      const delay = computeBackoffDelayMs(0, {
+        jitterStrategy: 'decorrelated',
+        baseMs: 500,
+        randomFn: () => 0,
+      });
+      expect(delay).toBe(500);
+    });
+
+    it('caps the decorrelated delay at maxMs', () => {
+      const delay = computeBackoffDelayMs(5, {
+        jitterStrategy: 'decorrelated',
+        baseMs: 500,
+        maxMs: 30000,
+        previousDelayMs: 20000,
+        randomFn: () => 0.9999,
+      });
+      expect(delay).toBe(30000);
+    });
+
+    it('never returns less than baseMs', () => {
+      const delay = computeBackoffDelayMs(3, {
+        jitterStrategy: 'decorrelated',
+        baseMs: 500,
+        previousDelayMs: 500,
+        randomFn: () => 0,
+      });
+      expect(delay).toBe(500);
+    });
+
+    it('is deterministic with a fixed randomFn across repeated calls', () => {
+      const opts = {
+        jitterStrategy: 'decorrelated' as const,
+        baseMs: 500,
+        previousDelayMs: 2000,
+        randomFn: () => 0.25,
+      };
+      // 500 + 0.25 * (6000 - 500) = 1875
+      expect(computeBackoffDelayMs(2, opts)).toBe(1875);
+      expect(computeBackoffDelayMs(2, opts)).toBe(1875);
+    });
+  });
 });
