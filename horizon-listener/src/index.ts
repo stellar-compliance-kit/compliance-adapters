@@ -65,3 +65,9 @@ export {
   type TracingOptions,
   extractTraceContext,
 } from './tracing';
+export {
+  RedisLeaderElector,
+  type LeaderElector,
+  type LeaderElectionOptions,
+  type RedisLeaderElectorOptions,
+} from './leaderElection';

@@ -12,3 +12,9 @@ revocation. `verifyChallenge` now returns a `jti` (the challenge transaction
 hash) and the middleware sets `req.stellarTokenId`, rejecting revoked tokens
 with 401 `token revoked`. `InMemoryRevocationStore` implements both and
 prunes expired token revocations.
+
+Add a `POST /introspect` endpoint returning `{ active, sub, exp, client_domain }`.
+`active` is `false` for invalid, expired, or revoked tokens (reusing the
+existing verification and revocation logic). The endpoint is protected by a
+shared secret supplied via the `INTROSPECTION_SECRET` env var and checked
+against the `Authorization: Bearer <secret>` header (or `X-Introspection-Secret`).

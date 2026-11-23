@@ -23,7 +23,8 @@
     "@compliance-adapters/logger": "*",
     "@compliance-adapters/metrics": "*",
     "@compliance-adapters/tracing": "*",
-    "@compliance-adapters/tracing-types": "*"
+    "@compliance-adapters/tracing-types": "*",
+    "ioredis": "^5.4.1"
   },
   "devDependencies": {
     "typescript": "^5.5.4",
