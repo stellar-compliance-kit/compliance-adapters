@@ -33,6 +33,53 @@ This is a monorepo with three independent packages and a runnable examples direc
 
 Each package has its own `README.md`, tests, and `package.json`.
 
+## Rate limiting behind a proxy (`sep10-auth`)
+
+The `sep10-auth` rate limiter's default key generator uses `req.ip` to identify clients. If your
+app runs behind a load balancer, reverse proxy, or CDN and you have **not** configured Express to
+trust that proxy, `req.ip` will be the proxy's address for every request. The result: all clients
+share a single IP and get rate limited together, so one busy client can lock everyone else out.
+
+You must tell Express which proxies to trust so `req.ip` reflects the real client address.
+
+### Express
+
+```ts
+import express from 'express';
+
+const app = express();
+
+// Trust the first hop (e.g. a single load balancer / reverse proxy in front of the app).
+// Use a specific IP/CIDR list or a hop count that matches your deployment topology.
+app.set('trust proxy', 1);
+
+// ...register the sep10-auth middleware as usual
+```
+
+Set `trust proxy` to the number of proxy hops in front of your app, or to an explicit list of
+trusted proxy addresses/subnets (e.g. `app.set('trust proxy', '10.0.0.0/8')`). Avoid
+`app.set('trust proxy', true)` in production unless every request is guaranteed to pass through a
+trusted proxy — otherwise clients can spoof `X-Forwarded-For` and evade the limiter.
+
+### Fastify
+
+Fastify does not use Express's `trust proxy` setting; configure `trustProxy` on the Fastify
+instance instead:
+
+```ts
+import Fastify from 'fastify';
+
+const app = Fastify({
+  // Trust the first hop, or pass an explicit list of trusted proxy addresses/subnets.
+  trustProxy: 1,
+});
+
+// ...register the sep10-auth middleware as usual
+```
+
+As with Express, prefer a hop count or explicit proxy list over `trustProxy: true` so clients
+cannot spoof `X-Forwarded-For` to bypass the rate limiter.
+
 ## Examples
 
 Runnable examples live under [`examples/`](./examples). Each is a self-contained npm workspace
@@ -159,105 +206,6 @@ each package independently.
 
 ### Working with a single package
 
-If you only need to work on one adapter:
+If you only need to work on 
 
-```bash
-# Install and test sep10-auth
-npm install --workspace=sep10-auth
-npm test --workspace=sep10-auth
-
-# Install and test sanctions-oracle
-npm install --workspace=sanctions-oracle
-npm test --workspace=sanctions-oracle
-
-# Install and test horizon-listener
-npm install --workspace=horizon-listener
-npm test --workspace=horizon-listener
-```
-
-## Full-stack demo example
-
-A runnable example app lives at `examples/full-stack-demo`. It demonstrates the end-to-end flow:
-
-- `sep10-auth` protects a `/private` route with SEP-10 bearer token verification
-- `horizon-listener` polls Soroban RPC contract events and forwards them to an internal webhook
-- `sanctions-oracle` sync logic is exposed via a `/sanctions/sync` endpoint using the mock provider
-
-To run it:
-
-```bash
-npm install
-npm run build --workspaces --if-present
-cd examples/full-stack-demo
-npm install
-npm start
-```
-
-The demo starts an Express server on `http://localhost:3001` and exposes:
-
-- `GET  /health`                   — liveness check
-- `GET  /auth?account=G…`          — issue SEP-10 challenge
-- `POST /auth`                     — verify signed challenge
-- `POST /auth/revoke`              — revoke a bearer token
-- `GET  /sanctions/check?address=` — check an address via ProviderRegistry
-- `POST /sanctions/sync`           — run a full sanctions sync
-- `POST /admin/listener/start`     — start Horizon event listener (requires `X-Admin-Token`)
-- `POST /admin/listener/stop`      — stop Horizon event listener (requires `X-Admin-Token`)
-- `GET  /metrics`                  — Prometheus metrics
-
-You can configure runtime values with environment variables such as `SERVER_ACCOUNT_ID`, `RPC_URL`, and `CONTRACT_ID`. See the root [`.env.example`](./.env.example) for the full list of documented variables across all packages.
-
-To try the sanctions sync script against testnet in dry-run mode (no transactions submitted, just
-logs what it would do):
-
-```bash
-npm run build --workspace=sanctions-oracle
-npx compliance-adapters sync-sanctions --dry-run --addresses ./sanctions-oracle/test/fixtures/addresses.json
-```
-
-Run `npx compliance-adapters --help` for available commands and
-`npx compliance-adapters sync-sanctions --help` for command-specific options.
-
-See each package's README for its full API and configuration options.
-
-## Changelog
-
-See [CHANGELOG.md](./CHANGELOG.md) for release notes and version history.
-
-## Contributing
-
-Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and workflow details.
-New to the Stellar ecosystem? Check the [Glossary](./docs/glossary.md) for definitions of
-common terms like StrKey, SEP-10, muxed account, ScVal, and network passphrase.
-This repo participates in the [Drips Wave](https://www.drips.network/) Stellar Program and is
-deliberately kept full of small, well-scoped issues. Open issues are labeled by complexity
-(`complexity: trivial`, `complexity: medium`, `complexity: high`) so you can pick work that
-matches your available time — trivial issues are also tagged `good first issue` and don't require
-Soroban expertise.
-
-## Security
-
-See [SECURITY.md](./SECURITY.md) for the trust model behind each package and how to report a
-vulnerability.
-
-## Disclaimer
-
-The `sanctions-oracle` package's bundled mock provider is a **placeholder for development and
-testing only**. It contains no real sanctions or watchlist data and **must not be used as an
-actual compliance data source in production**. Integrate a real, licensed sanctions/watchlist
-data provider before relying on this package for real compliance decisions.
-
-## License
-
-[MIT](./LICENSE)
-
-## Package-scoped issue labels
-
-This repo uses package-scoped labels to make triage easier. The intended labels are:
-
-- `package: sep10-auth` — issues specific to the `sep10-auth` package
-- `package: sanctions-oracle` — issues specific to the `sanctions-oracle` package
-- `package: horizon-listener` — issues specific to the `horizon-listener` package
-
-A helper script `scripts/apply-package-labels.js` can create these labels and apply them to open
-issues using simple heuristics. It requires a `GITHUB_TOKEN` with repo access to run.
+/* … truncated 4134 chars — edit only what you need near the top … */
