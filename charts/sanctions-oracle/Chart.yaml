@@ -1,0 +1,13 @@
+apiVersion: v2
+name: sanctions-oracle
+description: Reference Kubernetes deployment for the sanctions-oracle sync job
+type: application
+version: 0.1.0
+appVersion: '0.1.0'
+keywords:
+  - stellar
+  - soroban
+  - sanctions
+  - compliance
+sources:
+  - https://github.com/stellar-compliance-kit/compliance-adapters

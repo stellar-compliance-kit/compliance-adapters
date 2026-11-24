@@ -27,6 +27,16 @@ import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { withRetry, RetryOptions } from './retry';
 import { type Signer, toSigner, signTransaction } from './signer';
 import { computeBackoffDelayMs, BackoffOptions } from '@compliance-adapters/backoff';
+import { parseDuration, runScheduler } from './scheduler';
+import { WebhookNotifier, type SyncNotifier, redactAddresses } from './notifier';
+export { parseDuration, runScheduler } from './scheduler';
+export {
+  SyncNotifier,
+  WebhookNotifier,
+  SyncNotification,
+  redactAddress,
+  redactAddresses,
+} from './notifier';
 
 interface CacheEntry {
   result: CheckResult;
@@ -285,6 +295,8 @@ export interface SyncOptions {
    * estimator never fails the dry-run; the error is reported instead.
    */
   feeEstimator?: (sampleAddress: string) => Promise<bigint | number | string>;
+  /** Optional notification sink for sync results; addresses are redacted before delivery. */
+  notifier?: SyncNotifier;
 }
 
 /** Estimated cost of the writes a dry-run would perform. */
@@ -460,7 +472,7 @@ async function executeConcurrent<T>(
   }
 }
 
-export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
+async function syncSanctionsToDenylistInner(options: SyncOptions): Promise<SyncResult> {
   const {
     provider,
     addresses,
@@ -824,6 +836,51 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   };
 }
 
+/**
+ * Run a sync and notify the configured sink of the outcome. Notification
+ * failures never fail (or mask the failure of) the underlying sync.
+ */
+export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
+  const notifier = options.notifier;
+  if (!notifier) return syncSanctionsToDenylistInner(options);
+
+  const notify = async (notification: Parameters<SyncNotifier['notify']>[0]): Promise<void> => {
+    try {
+      await notifier.notify(notification);
+    } catch (error) {
+      options.logger?.error?.('sanctions-oracle: notifier failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+  const timestamp = new Date().toISOString();
+  try {
+    const result = await syncSanctionsToDenylistInner(options);
+    await notify({
+      status: 'success',
+      timestamp,
+      checked: result.checked,
+      added: redactAddresses(result.written),
+      failed: redactAddresses(result.failed),
+      invalid: result.invalid.length,
+      removed: result.removed?.length ?? 0,
+    });
+    return result;
+  } catch (error) {
+    await notify({
+      status: 'failure',
+      timestamp,
+      checked: 0,
+      added: [],
+      failed: [],
+      invalid: 0,
+      removed: 0,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    throw error;
+  }
+}
+
 export interface RpcFeeEstimatorOptions {
   rpcUrl: string;
   networkPassphrase: string;
@@ -1071,6 +1128,14 @@ export interface CliArgs {
   auditLogPath?: string;
   /** Path to a checkpoint file; addresses completed by a prior run are skipped. */
   checkpointPath?: string;
+  /** Repeat the sync at this interval (e.g. `15m`) with jitter and overlap protection. */
+  everyMs?: number;
+  /** Maximum random jitter added to each scheduler interval. */
+  jitterMs?: number;
+  /** Exclusive lock file used by scheduler mode. */
+  lockPath?: string;
+  /** Slack-compatible webhook URL for redacted sync notifications. */
+  notifyWebhookUrl?: string;
 }
 
 /** Logger that writes every level to stderr, keeping stdout clean for `--json`. */
@@ -1163,6 +1228,22 @@ export function parseArgs(argv: string[]): CliArgs {
         args.checkpointPath = readValue(arg, i);
         i += 1;
         break;
+      case '--every':
+        args.everyMs = parseDuration(readValue(arg, i));
+        i += 1;
+        break;
+      case '--jitter':
+        args.jitterMs = parseDuration(readValue(arg, i));
+        i += 1;
+        break;
+      case '--lock-file':
+        args.lockPath = readValue(arg, i);
+        i += 1;
+        break;
+      case '--notify-webhook':
+        args.notifyWebhookUrl = readValue(arg, i);
+        i += 1;
+        break;
       case '--help':
       case '-h':
         args.help = true;
@@ -1208,6 +1289,12 @@ OPTIONS:
   --json                      Print only the JSON SyncResult on stdout; logs go to stderr
   --audit-log <path>          Append one JSON line per denylist write to <path>
   --checkpoint <path>         Persist completed addresses to <path> and skip them on re-run
+  --every <duration>          Scheduler mode: repeat every interval, e.g. 15m, 30s, 1h
+  --jitter <duration>         Add up to this much random delay to each scheduled interval
+  --lock-file <path>          Scheduler lock file (default: per-user path in the OS temp dir;
+                               also settable via SANCTIONS_ORACLE_SCHEDULER_LOCK)
+  --notify-webhook <url>      POST redacted sync results to a Slack-compatible webhook
+                               (or set SANCTIONS_ORACLE_NOTIFY_WEBHOOK)
   --help, -h                  Show this help message
 
 ENVIRONMENT:
@@ -1229,12 +1316,39 @@ EXAMPLES:
 }
 
 export async function runCli(argv?: string[]): Promise<void> {
+  const processArgv = argv ?? process.argv.slice(2);
+  const args = parseArgs(processArgv);
+  if (!args.everyMs || args.help || !args.addressesPath) {
+    return runCliOnce(processArgv);
+  }
+
+  // Scheduler options are consumed here; each tick runs the ordinary CLI once.
+  const scheduledArgv: string[] = [];
+  for (let i = 0; i < processArgv.length; i += 1) {
+    if (['--every', '--jitter', '--lock-file'].includes(processArgv[i])) {
+      i += 1;
+    } else {
+      scheduledArgv.push(processArgv[i]);
+    }
+  }
+  await runScheduler({
+    everyMs: args.everyMs,
+    jitterMs: args.jitterMs,
+    lockPath: args.lockPath,
+    logger: args.json ? stderrLogger : consoleLogger,
+    run: () => runCliOnce(scheduledArgv),
+  });
+}
+
+async function runCliOnce(argv?: string[]): Promise<void> {
   // The CLI entrypoint uses consoleLogger so dry-run output and errors are
   // visible by default; programmatic callers should inject their own logger.
   const processArgv = argv ?? process.argv.slice(2);
   const args = parseArgs(processArgv);
   // --json reserves stdout for the single JSON SyncResult.
   const logger = args.json ? stderrLogger : consoleLogger;
+  const webhookUrl = process.env.SANCTIONS_ORACLE_NOTIFY_WEBHOOK ?? args.notifyWebhookUrl;
+  const notifier = webhookUrl ? new WebhookNotifier(webhookUrl) : undefined;
 
   if (args.help) {
     printHelp();
@@ -1347,6 +1461,7 @@ export async function runCli(argv?: string[]): Promise<void> {
       currentDenylist,
       reconcile: args.reconcile,
       ...(dryRunFeeEstimator ? { feeEstimator: dryRunFeeEstimator } : {}),
+      ...(notifier ? { notifier } : {}),
     });
     if (result.feeEstimate?.error) {
       logger.error?.(`sanctions-oracle: ${result.feeEstimate.error}`);
@@ -1409,6 +1524,7 @@ export async function runCli(argv?: string[]): Promise<void> {
     reconcile: args.reconcile,
     checkpoint,
     resume: Boolean(checkpoint),
+    ...(notifier ? { notifier } : {}),
   });
   // CLI-only: machine-readable result to stdout (see dry-run branch above).
   // eslint-disable-next-line no-console

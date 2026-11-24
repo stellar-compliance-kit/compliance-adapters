@@ -1,0 +1,100 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "sanctions-oracle.fullname" . }}
+  labels:
+    {{- include "sanctions-oracle.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.cronjob.schedule | quote }}
+  concurrencyPolicy: {{ .Values.cronjob.concurrencyPolicy }}
+  suspend: {{ .Values.cronjob.suspend }}
+  successfulJobsHistoryLimit: {{ .Values.cronjob.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cronjob.failedJobsHistoryLimit }}
+  startingDeadlineSeconds: {{ .Values.cronjob.startingDeadlineSeconds }}
+  jobTemplate:
+    spec:
+      backoffLimit: {{ .Values.cronjob.backoffLimit }}
+      template:
+        metadata:
+          labels:
+            {{- include "sanctions-oracle.selectorLabels" . | nindent 12 }}
+        spec:
+          restartPolicy: {{ .Values.cronjob.restartPolicy }}
+          activeDeadlineSeconds: {{ .Values.cronjob.activeDeadlineSeconds }}
+          serviceAccountName: {{ .Values.serviceAccountName | quote }}
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: sanctions-oracle
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              envFrom:
+                - configMapRef:
+                    name: {{ include "sanctions-oracle.fullname" . }}-config
+              env:
+                - name: SANCTIONS_ORACLE_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "sanctions-oracle.secretName" . }}
+                      key: SANCTIONS_ORACLE_SECRET_KEY
+                      optional: true
+                - name: SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "sanctions-oracle.secretName" . }}
+                      key: SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY
+                      optional: true
+                - name: SANCTIONS_ORACLE_REPORT_SIGNING_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "sanctions-oracle.secretName" . }}
+                      key: SANCTIONS_ORACLE_REPORT_SIGNING_KEY
+                      optional: true
+              command: ["node", "dist/sync.js"]
+              args:
+                - --addresses
+                - /etc/sanctions-oracle/addresses.json
+                - --rpc-url
+                - $(SANCTIONS_ORACLE_RPC_URL)
+                - --network-passphrase
+                - $(SANCTIONS_ORACLE_NETWORK_PASSPHRASE)
+                - --contract-id
+                - $(SANCTIONS_ORACLE_CONTRACT_ID)
+                - --json
+                {{- with .Values.cronjob.lockFile }}
+                - --lock-file
+                - {{ . | quote }}
+                {{- end }}
+                {{- range .Values.cronjob.extraArgs }}
+                - {{ . | quote }}
+                {{- end }}
+              volumeMounts:
+                - name: addresses
+                  mountPath: /etc/sanctions-oracle
+                  readOnly: true
+                - name: state
+                  mountPath: /var/lib/sanctions-oracle
+              {{- with .Values.resources }}
+              resources:
+                {{- toYaml . | nindent 16 }}
+              {{- end }}
+          volumes:
+            - name: addresses
+              configMap:
+                name: {{ include "sanctions-oracle.fullname" . }}-addresses
+            - name: state
+              emptyDir: {}
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.affinity }}
+          affinity:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}

@@ -25,7 +25,15 @@ export {
   ReviewAddress,
   FeeEstimate,
   RpcFeeEstimatorOptions,
+  parseDuration,
+  runScheduler,
+  WebhookNotifier,
+  type SyncNotifier,
+  type SyncNotification,
+  redactAddress,
+  redactAddresses,
 } from './sync';
+export { type SchedulerOptions } from './scheduler';
 export { SyncCheckpointStore, InMemoryCheckpointStore, FileCheckpointStore } from './checkpoint';
 export { createJsonlAuditLogger, JsonlAuditLoggerOptions } from './auditLog';
 export { withRetry, RetryOptions } from './retry';
@@ -66,6 +74,12 @@ export {
   type TracingOptions,
   extractTraceContext,
 } from './tracing';
+export {
+  signReport,
+  verifyReportSignature,
+  canonicalJson,
+  type SignedReport,
+} from './reportSigning';
 export { RateLimitedSanctionsProvider, RateLimitOptions } from './rateLimitedProvider';
 export { RestSanctionsProvider } from './restProvider';
 export type { RestSanctionsProviderOptions } from './restProvider';

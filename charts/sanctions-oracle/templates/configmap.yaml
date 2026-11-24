@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sanctions-oracle.fullname" . }}-config
+  labels:
+    {{- include "sanctions-oracle.labels" . | nindent 4 }}
+data:
+  SANCTIONS_ORACLE_RPC_URL: {{ .Values.config.rpcUrl | quote }}
+  SANCTIONS_ORACLE_NETWORK_PASSPHRASE: {{ .Values.config.networkPassphrase | quote }}
+  SANCTIONS_ORACLE_CONTRACT_ID: {{ .Values.config.contractId | quote }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "sanctions-oracle.fullname" . }}-addresses
+  labels:
+    {{- include "sanctions-oracle.labels" . | nindent 4 }}
+data:
+  addresses.json: |
+    {{ toJson .Values.config.addresses | nindent 4 }}

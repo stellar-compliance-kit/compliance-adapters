@@ -155,6 +155,54 @@ With `--json`, stdout contains only the final `SyncResult` as JSON and all
 progress logs go to stderr, so CI and cron wrappers can pipe it straight into
 `jq`. Exit codes are unchanged.
 
+### Sync notifications
+
+Pass a `SyncNotifier` as `SyncOptions.notifier` to be told when a sync
+completes or throws. The built-in `WebhookNotifier` POSTs a Slack-compatible
+JSON payload (`{ text, status, checked, added, failed, invalid, removed, ... }`)
+to an incoming webhook or any JSON webhook endpoint. Addresses are redacted
+(`GABC…WXYZ`) in both the message and the structured fields; full Stellar
+addresses are never sent. Notification failures are logged but never break a
+sync.
+
+```ts
+import { syncSanctionsToDenylist, WebhookNotifier } from 'sanctions-oracle';
+
+await syncSanctionsToDenylist({
+  provider,
+  addresses,
+  writer,
+  notifier: new WebhookNotifier(process.env.SANCTIONS_ORACLE_NOTIFY_WEBHOOK!),
+});
+```
+
+From the CLI, use `--notify-webhook <url>` or set
+`SANCTIONS_ORACLE_NOTIFY_WEBHOOK`. Custom destinations can implement the
+`SyncNotifier` interface (`notify(notification): void | Promise<void>`).
+
+### Tamper-evident sync reports
+
+`signReport(report, key)` produces a `SignedReport` containing the original
+report, its SHA-256 digest, the signer's `G...` public key, and a base64 Ed25519
+signature over the canonical JSON bytes (object keys are sorted recursively so
+the same report always signs to the same bytes). Configure the key with a
+Stellar `Keypair` or an `S...` secret string, e.g. from
+`SANCTIONS_ORACLE_REPORT_SIGNING_KEY`. `verifyReportSignature(signed, expectedPublicKey?)`
+checks the digest and signature and returns `false` for tampered or malformed
+input.
+
+```ts
+import { Keypair } from '@stellar/stellar-sdk';
+import { signReport, verifyReportSignature } from 'sanctions-oracle';
+
+const key = Keypair.fromSecret(process.env.SANCTIONS_ORACLE_REPORT_SIGNING_KEY!);
+const signed = signReport(result, key);
+if (!verifyReportSignature(signed, key.publicKey())) {
+  throw new Error('Sync report signature is invalid');
+}
+// Store or publish JSON.stringify(signed) as the tamper-evident record.
+```
+
 ### Example: Chainalysis provider
 
 [`examples/providers/chainalysis.ts`](../examples/providers/chainalysis.ts)
@@ -683,8 +731,17 @@ number of pending writes and reported both in the log output and as
 
 ### Scheduled syncs
 
+Run the CLI with `--every <duration>` for a built-in scheduler, e.g.
+`--every 15m --jitter 1m`. Each tick adds a random delay of up to the jitter
+amount to avoid synchronized thundering herds, and an exclusive lock file
+(prevent overlapping runs); a tick that finds the lock held is skipped. The
+default lock lives in the OS temp directory per user; set `--lock-file <path>`
+or `SANCTIONS_ORACLE_SCHEDULER_LOCK` to share it across replicas. Programmatic
+callers can use `runScheduler({ everyMs, jitterMs, run })`.
+
 See [`docs/deploy/`](../docs/deploy/README.md) for a Kubernetes CronJob and a
-systemd service + timer.
+systemd service + timer; the Helm chart in [`charts/sanctions-oracle`](../charts/sanctions-oracle)
+uses the CronJob approach.
 
 ## Troubleshooting
 

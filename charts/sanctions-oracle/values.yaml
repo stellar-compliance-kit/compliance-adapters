@@ -1,0 +1,50 @@
+# Default values for the sanctions-oracle CronJob.
+image:
+  repository: ghcr.io/stellar-compliance-kit/compliance-adapters
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+nameOverride: ''
+fullnameOverride: ''
+
+serviceAccountName: ''
+
+cronjob:
+  # Run the sync every 15 minutes.
+  schedule: '*/15 * * * *'
+  concurrencyPolicy: Forbid # overlap protection: skip a tick when one is still running
+  suspend: false
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  backoffLimit: 2
+  activeDeadlineSeconds: 3600
+  startingDeadlineSeconds: 300
+  restartPolicy: OnFailure
+  extraArgs: []
+  # Mount a shared volume here to share the scheduler lock across replicas.
+  lockFile: ''
+
+# Non-secret configuration rendered into a ConfigMap and exposed as env vars.
+config:
+  rpcUrl: https://soroban-testnet.stellar.org
+  networkPassphrase: 'Test SDF Network ; September 2015'
+  contractId: ''
+  # Addresses to screen, written to /etc/sanctions-oracle/addresses.json.
+  addresses: []
+
+# Secret values rendered into a Kubernetes Secret. Prefer `existingSecret` in
+# production so secrets are managed outside this chart.
+existingSecret: ''
+secret:
+  # Stellar S... signing key for denylist writes.
+  SANCTIONS_ORACLE_SECRET_KEY: ''
+  # Optional separate fee-paying account.
+  SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY: ''
+  # Optional Ed25519 S... key used to sign sync reports.
+  SANCTIONS_ORACLE_REPORT_SIGNING_KEY: ''
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
