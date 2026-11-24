@@ -58,6 +58,23 @@ export interface Histogram<Phase extends string> {
   snapshot(phase: Phase): { count: number; sum: number; buckets: Map<number | '+Inf', number> };
 }
 
+/** Snapshot of a summary's observations for one phase. */
+export interface SummarySnapshot {
+  count: number;
+  sum: number;
+  /** Configured quantile → observed value (linear interpolation). */
+  quantiles: Map<number, number>;
+}
+
+/**
+ * A summary tracks the distribution of arbitrary observed values and exposes
+ * configurable quantiles (e.g. p50/p90/p99) alongside count and sum.
+ */
+export interface Summary<Phase extends string> {
+  observe(phase: Phase, value: number): void;
+  snapshot(phase: Phase): SummarySnapshot;
+}
+
 /**
  * A gauge holding a current value (e.g. queue depth, ledger lag, cache size)
  * that can go up and down, keyed by phase.
@@ -187,6 +204,66 @@ class DefaultHistogram<Phase extends string> implements Histogram<Phase> {
   }
 }
 
+// ── Summary implementation ────────────────────────────────────────────────────
+
+/** Quantiles exposed by default when a summary is enabled. */
+export const DEFAULT_SUMMARY_QUANTILES = [0.5, 0.9, 0.99];
+
+class DefaultSummary<Phase extends string> implements Summary<Phase> {
+  private readonly quantiles: number[];
+  private readonly observations = new Map<Phase, number[]>();
+  private readonly maxSeries: number;
+  private readonly warnOnce: () => void;
+
+  constructor(
+    quantiles: number[] = DEFAULT_SUMMARY_QUANTILES,
+    maxSeries: number = DEFAULT_MAX_SERIES,
+    warnOnce: () => void = () => undefined,
+  ) {
+    this.quantiles = [...quantiles].sort((a, b) => a - b);
+    this.maxSeries = maxSeries;
+    this.warnOnce = warnOnce;
+  }
+
+  observe(phase: Phase, value: number): void {
+    let target = phase;
+    if (!this.observations.has(target) && (target as string) !== OVERFLOW_LABEL) {
+      const realSize = this.observations.has(OVERFLOW_LABEL as Phase)
+        ? this.observations.size - 1
+        : this.observations.size;
+      if (realSize >= this.maxSeries) {
+        target = OVERFLOW_LABEL as Phase;
+        this.warnOnce();
+      }
+    }
+    if (!this.observations.has(target)) this.observations.set(target, []);
+    this.observations.get(target)!.push(value);
+  }
+
+  snapshot(phase: Phase): SummarySnapshot {
+    const values = [...(this.observations.get(phase) ?? [])].sort((a, b) => a - b);
+    const count = values.length;
+    const sum = values.reduce((acc, v) => acc + v, 0);
+    const quantiles = new Map<number, number>();
+    for (const q of this.quantiles) {
+      if (count === 0) {
+        quantiles.set(q, 0);
+        continue;
+      }
+      // Linear interpolation between the two closest ranks (R-7).
+      const position = (count - 1) * q;
+      const lower = Math.floor(position);
+      const upper = Math.ceil(position);
+      const value =
+        lower === upper
+          ? values[lower]
+          : values[lower] + (values[upper] - values[lower]) * (position - lower);
+      quantiles.set(q, value);
+    }
+    return { count, sum, quantiles };
+  }
+}
+
 // ── Gauge implementation ──────────────────────────────────────────────────────
 
 class DefaultGauge<Phase extends string> implements Gauge<Phase> {
@@ -246,6 +323,13 @@ class NoopHistogram<Phase extends string> implements Histogram<Phase> {
   }
 }
 
+class NoopSummary<Phase extends string> implements Summary<Phase> {
+  observe(_phase: Phase, _value: number): void {}
+  snapshot(_phase: Phase): SummarySnapshot {
+    return { count: 0, sum: 0, quantiles: new Map() };
+  }
+}
+
 class NoopGauge<Phase extends string> implements Gauge<Phase> {
   set(_phase: Phase, _value: number): void {}
   inc(_phase: Phase, _amount?: number): void {}
@@ -265,6 +349,13 @@ export interface MetricsRegistryOptions<Phase extends string> {
   /** Custom histogram bucket boundaries in milliseconds. */
   histogramBuckets?: number[];
   /**
+   * Quantiles exposed by the optional summary metric, in [0, 1]. Omit to
+   * disable summaries entirely. Use `DEFAULT_SUMMARY_QUANTILES` for defaults.
+   */
+  summaryQuantiles?: number[];
+  /** Enable a summary with the default quantiles. */
+  summary?: boolean;
+  /**
    * Maximum distinct series per metric (default 1000). Beyond it, new label
    * sets are folded into an `__overflow__` series and a warning is logged
    * once. Guards against unbounded cardinality (e.g. address/URL labels).
@@ -283,17 +374,28 @@ export interface MetricsRegistryOptions<Phase extends string> {
 export class MetricsRegistry<Phase extends string> {
   readonly counter: Counter<Phase>;
   readonly histogram: Histogram<Phase>;
+  readonly summary: Summary<Phase>;
   readonly gauge: Gauge<Phase>;
   private readonly prefix: string;
   private readonly phases: Phase[];
+  private readonly summaryQuantiles: number[] | undefined;
 
   constructor(options: MetricsRegistryOptions<Phase>) {
     this.prefix = options.prefix;
     this.phases = options.phases;
+    this.summaryQuantiles = options.summaryQuantiles
+      ? [...options.summaryQuantiles].sort((a, b) => a - b)
+      : options.summary
+        ? [...DEFAULT_SUMMARY_QUANTILES]
+        : undefined;
+    if (this.summaryQuantiles?.some((q) => q < 0 || q > 1 || Number.isNaN(q))) {
+      throw new Error(`metrics: summary quantiles must be in [0, 1]`);
+    }
     const maxSeries = options.maxSeries ?? DEFAULT_MAX_SERIES;
     const warnOnce = makeWarnOnce(options.onMaxSeriesExceeded);
     this.counter = new DefaultCounter<Phase>(maxSeries, warnOnce);
     this.histogram = new DefaultHistogram<Phase>(options.histogramBuckets, maxSeries, warnOnce);
+    this.summary = new DefaultSummary<Phase>(this.summaryQuantiles ?? [], maxSeries, warnOnce);
     this.gauge = new DefaultGauge<Phase>(maxSeries, warnOnce);
   }
 
@@ -352,6 +454,23 @@ export class MetricsRegistry<Phase extends string> {
       lines.push(`${histName}_count{phase="${escapeLabelValue(phase)}"} ${count}`);
     }
 
+    // ── Summary (opt-in) ─────────────────────────────────────────────────────
+    if (this.summaryQuantiles && this.summaryQuantiles.length > 0) {
+      const summaryName = `${this.prefix}_summary`;
+      lines.push(`# HELP ${summaryName} Summary of observed values by phase`);
+      lines.push(`# TYPE ${summaryName} summary`);
+      for (const phase of this.phases) {
+        const { count, sum, quantiles } = this.summary.snapshot(phase);
+        for (const [q, value] of quantiles) {
+          lines.push(
+            `${summaryName}{phase="${escapeLabelValue(phase)}",quantile="${q}"} ${value}`,
+          );
+        }
+        lines.push(`${summaryName}_sum{phase="${escapeLabelValue(phase)}"} ${sum}`);
+        lines.push(`${summaryName}_count{phase="${escapeLabelValue(phase)}"} ${count}`);
+      }
+    }
+
     // ── Gauge ────────────────────────────────────────────────────────────────
     const gaugeName = `${this.prefix}_gauge`;
     lines.push(`# HELP ${gaugeName} Current gauge value by phase`);
@@ -373,6 +492,7 @@ export class MetricsRegistry<Phase extends string> {
 export class NoopMetricsRegistry<Phase extends string> {
   readonly counter: Counter<Phase> = new NoopCounter<Phase>();
   readonly histogram: Histogram<Phase> = new NoopHistogram<Phase>();
+  readonly summary: Summary<Phase> = new NoopSummary<Phase>();
   readonly gauge: Gauge<Phase> = new NoopGauge<Phase>();
 
   expose(): string {
