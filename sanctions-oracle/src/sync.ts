@@ -201,6 +201,20 @@ export interface SyncOptions {
   addresses: string[];
   writer: DenylistWriter;
   dryRun?: boolean;
+  /**
+   * Produce a diff report of the planned denylist changes before writing.
+   * Implies `dryRun`: no transactions are submitted. The report is available
+   * programmatically as {@link SyncResult.plan} and printed by the CLI.
+   */
+  plan?: boolean;
+  /** Hard deadline for the run in milliseconds; no new checks start once elapsed. */
+  maxDurationMs?: number;
+  /**
+   * Maximum number of denylist writes (adds + removals) allowed without manual
+   * approval. When a live run would exceed this, no writes are submitted and
+   * the result has `approvalRequired: true` (CLI exits with code 4).
+   */
+  maxAutoWrites?: number;
   /** Retry-with-backoff config applied around each provider.checkAddress call. */
   retry?: RetryOptions;
   /**
@@ -240,6 +254,16 @@ export interface SyncOptions {
    * audit-logged with the provider source. Defaults to false: sync only adds.
    */
   reconcile?: boolean;
+  /**
+   * Minimum age (in days) of a denylist entry before it may be delisted.
+   * Defaults to 0 (no delay) for backward compatibility; operators should set
+   * a positive value in production. Entries younger than this, or with unknown
+   * age, are placed in {@link SyncResult.removalReviewQueue} instead of being
+   * removed. Age is read from {@link SyncOptions.denylistAddedAt}.
+   */
+  minRemovalAgeDays?: number;
+  /** When each denylist entry was added, keyed by address. Values may be ISO dates or epoch milliseconds. */
+  denylistAddedAt?: Record<string, string | number>;
   /**
    * Optional metrics registry.  Pass a `MetricsRegistry` instance to record
    * per-phase counters and latency histograms for `address_check` and
@@ -349,8 +373,19 @@ export interface ReviewAddress {
   score: number;
 }
 
+/** A cleared denylist entry held back from delisting pending operator review. */
+export interface RemovalReviewEntry {
+  address: string;
+  source: string;
+  reason: 'too-new' | 'unknown-age' | 'invalid-age';
+  /** Minimum required age in days at the time of the run. */
+  minRemovalAgeDays: number;
+}
+
 /** CLI exit code used when a run stops because `--max-duration` elapsed. */
 export const EXIT_CODE_DEADLINE_EXCEEDED = 3;
+/** CLI exit code used when a run is paused for manual approval of a large sync. */
+export const EXIT_CODE_APPROVAL_REQUIRED = 4;
 
 /**
  * A single address whose provider check failed on every retry attempt,
@@ -413,6 +448,8 @@ export interface SyncResult {
   plannedRemovals?: { address: string; source: string }[];
   /** Reconcile mode only: cleared addresses whose removal transaction failed. */
   failedRemovals?: FailedAddress[];
+  /** Reconcile mode only: cleared entries withheld from removal for manual review. */
+  removalReviewQueue?: RemovalReviewEntry[];
   /**
    * Flagged addresses whose score fell below {@link SyncOptions.minScoreToBlock}.
    * Reported for manual review and never written. Present only when
@@ -421,6 +458,19 @@ export interface SyncResult {
   needsReview?: ReviewAddress[];
   /** Dry-run only: estimated fee for the pending writes (see {@link SyncOptions.feeEstimator}). */
   feeEstimate?: FeeEstimate;
+  /** True when --max-duration stopped new checks before all addresses were processed. */
+  deadlineExceeded?: boolean;
+  /** True when the proposed writes exceeded {@link SyncOptions.maxAutoWrites}; nothing was written. */
+  approvalRequired?: boolean;
+  /** Number of writes the run proposed before it was paused. */
+  approvalRequiredCount?: number;
+  /** Threshold that triggered manual approval. */
+  approvalThreshold?: number;
+  /** Structured diff produced in {@link SyncOptions.plan} mode; nothing is written. */
+  plan?: {
+    adds: { address: string; source: string }[];
+    removes: { address: string; source: string }[];
+  };
 }
 
 interface FlaggedAddressWithSource {
@@ -466,7 +516,10 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     addresses,
     writer,
     dryRun = false,
+    plan = false,
     logger = noopLogger,
+    maxDurationMs,
+    maxAutoWrites,
     retry,
     cache,
     progressInterval = 100,
@@ -477,9 +530,14 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     checkpoint,
     resume = false,
     reconcile = false,
+    minRemovalAgeDays = 0,
+    denylistAddedAt,
     minScoreToBlock,
     feeEstimator,
   } = options;
+  // Plan mode is strictly read-only: it computes the same diff a live sync
+  // would apply, but never submits writes.
+  const effectiveDryRun = dryRun || plan;
   const deadline = maxDurationMs !== undefined ? Date.now() + maxDurationMs : undefined;
   const pastDeadline = () => deadline !== undefined && Date.now() >= deadline;
   const started = new Set<string>();
@@ -511,9 +569,18 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     safeLogger.debug(message);
   };
 
-  safeLogger.info('sanctions-oracle: starting sync', { total: addresses.length, dryRun });
+  safeLogger.info('sanctions-oracle: starting sync', {
+    total: addresses.length,
+    dryRun: effectiveDryRun,
+    plan,
+  });
 
-  if (reconcile && !dryRun && !writer.removeFromDenylist && !writer.removeFromDenylistWithSource) {
+  if (
+    reconcile &&
+    !effectiveDryRun &&
+    !writer.removeFromDenylist &&
+    !writer.removeFromDenylistWithSource
+  ) {
     throw new Error(
       'sanctions-oracle: reconcile requires a writer that implements removeFromDenylist',
     );
@@ -544,6 +611,22 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   const uniqueCount = validAddresses.length + invalid.length;
 
   const currentDenylistSet = new Set(currentDenylist.map(normalizeStellarAddress));
+  const addedAtMsByAddress = new Map<string, number>();
+  for (const [rawAddress, addedAt] of Object.entries(denylistAddedAt ?? {})) {
+    const ms = typeof addedAt === 'number' ? addedAt : Date.parse(addedAt);
+    if (Number.isFinite(ms)) {
+      addedAtMsByAddress.set(normalizeStellarAddress(rawAddress), ms);
+    }
+  }
+  /** Returns a review reason when an entry is too young to be delisted. */
+  const reviewRemoval = (address: string): RemovalReviewEntry['reason'] | undefined => {
+    if (minRemovalAgeDays <= 0) return undefined;
+    const addedAtMs = addedAtMsByAddress.get(address);
+    if (addedAtMs === undefined) return 'unknown-age';
+    if (addedAtMs > Date.now()) return 'invalid-age';
+    if (Date.now() - addedAtMs < minRemovalAgeDays * 24 * 60 * 60 * 1000) return 'too-new';
+    return undefined;
+  };
   if (reconcile) {
     // Denylist entries must be re-checked to learn whether they were cleared.
     for (const entry of currentDenylistSet) {
@@ -586,6 +669,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   const flaggedWithSource: FlaggedAddressWithSource[] = [];
   const needsReview: ReviewAddress[] = [];
   const clearedWithSource: FlaggedAddressWithSource[] = [];
+  const removalReviewQueue: RemovalReviewEntry[] = [];
   const failed: string[] = [];
   const failedWithReasons: FailedAddress[] = [];
   let checked = 0;
@@ -654,8 +738,14 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
         } else if (reconcile && currentDenylistSet.has(address)) {
           // Cleared by the provider but still on the denylist: it is only
           // checkpointed once the removal succeeds, so an interrupted removal
-          // is retried on resume.
-          clearedWithSource.push({ address, source: result.source });
+          // is retried on resume. Young/unknown-age entries go to the review
+          // queue instead of being automatically delisted.
+          const reason = reviewRemoval(address);
+          if (reason) {
+            removalReviewQueue.push({ address, source: result.source, reason, minRemovalAgeDays });
+          } else {
+            clearedWithSource.push({ address, source: result.source });
+          }
         } else {
           // Clean address: nothing left to do for it, so it can be checkpointed
           // now. Flagged addresses are checkpointed only after a successful
@@ -695,16 +785,49 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     flagged: flagged.length,
   });
 
+  const pendingAdds = flaggedWithSource.filter(({ address }) => !currentDenylistSet.has(address));
+  const proposedWrites = pendingAdds.length + (reconcile ? clearedWithSource.length : 0);
+  // A buggy provider returning thousands of addresses must not result in
+  // thousands of automatic on-chain writes. Pause before submitting anything.
+  if (!effectiveDryRun && maxAutoWrites !== undefined && proposedWrites > maxAutoWrites) {
+    safeLogger.warn('sanctions-oracle: approval required before writing denylist changes', {
+      proposedWrites,
+      maxAutoWrites,
+    });
+    return {
+      checked: started.size,
+      flagged,
+      written: [],
+      failed,
+      failedWithReasons,
+      invalid,
+      skipped,
+      deadlineExceeded,
+      dryRun: false,
+      approvalRequired: true,
+      approvalRequiredCount: proposedWrites,
+      approvalThreshold: maxAutoWrites,
+      ...(reconcile
+        ? {
+            removed: [],
+            plannedRemovals: clearedWithSource.map(({ address, source }) => ({ address, source })),
+            failedRemovals: [],
+            removalReviewQueue,
+          }
+        : {}),
+      ...(minScoreToBlock !== undefined ? { needsReview } : {}),
+    };
+  }
+
   const written: string[] = [];
   let feeEstimate: FeeEstimate | undefined;
-  if (dryRun) {
+  const plannedAdds: { address: string; source: string }[] = [];
+  if (effectiveDryRun) {
     const pendingWrites: string[] = [];
-    for (const { address } of flaggedWithSource) {
-      if (currentDenylistSet.has(address)) {
-        continue;
-      }
+    for (const { address, source } of pendingAdds) {
       pendingWrites.push(address);
-      safeLogger.info('sanctions-oracle: [dry-run] would call add_to_denylist', { address });
+      plannedAdds.push({ address, source });
+      safeLogger.info('sanctions-oracle: [dry-run] would call add_to_denylist', { address, source });
     }
     if (feeEstimator) {
       feeEstimate = await estimateDryRunFee(pendingWrites, feeEstimator);
@@ -767,7 +890,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   const failedRemovals: FailedAddress[] = [];
   if (reconcile) {
     for (const { address, source } of clearedWithSource) {
-      if (dryRun) {
+      if (effectiveDryRun) {
         safeLogger.info('sanctions-oracle: [dry-run] would call remove_from_denylist', {
           address,
           source,
@@ -811,12 +934,22 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
     failedWithReasons,
     invalid,
     skipped,
-    dryRun,
+    deadlineExceeded,
+    dryRun: effectiveDryRun,
+    ...(plan
+      ? {
+          plan: {
+            adds: plannedAdds,
+            removes: clearedWithSource.map(({ address, source }) => ({ address, source })),
+          },
+        }
+      : {}),
     ...(reconcile
       ? {
           removed,
           plannedRemovals: clearedWithSource.map(({ address, source }) => ({ address, source })),
           failedRemovals,
+          removalReviewQueue,
         }
       : {}),
     ...(minScoreToBlock !== undefined ? { needsReview } : {}),
@@ -1050,6 +1183,8 @@ export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): Deny
 export interface CliArgs {
   addressesPath?: string;
   dryRun: boolean;
+  /** Preview the add/remove diff without writing; implies dry-run. */
+  plan?: boolean;
   contractId?: string;
   rpcUrl?: string;
   networkPassphrase?: string;
@@ -1065,12 +1200,18 @@ export interface CliArgs {
   reconcile?: boolean;
   /** Path to a JSON array of the addresses currently on the denylist (the last snapshot). */
   denylistSnapshotPath?: string;
+  /** Minimum age in days before a cleared denylist entry may be removed. */
+  minRemovalAgeDays?: number;
+  /** Pause for approval when a live run proposes more than this many writes. */
+  approvalThreshold?: number;
   /** Print only the JSON SyncResult on stdout; route all logs to stderr. */
   json?: boolean;
   /** Path to an append-only JSONL file that records every denylist write. */
   auditLogPath?: string;
   /** Path to a checkpoint file; addresses completed by a prior run are skipped. */
   checkpointPath?: string;
+  /** Hard deadline in milliseconds; no new checks start once elapsed. */
+  maxDurationMs?: number;
 }
 
 /** Logger that writes every level to stderr, keeping stdout clean for `--json`. */
@@ -1108,6 +1249,9 @@ export function parseArgs(argv: string[]): CliArgs {
         break;
       case '--dry-run':
         args.dryRun = true;
+        break;
+      case '--plan':
+        args.plan = true;
         break;
       case '--contract-id':
         args.contractId = readValue(arg, i);
@@ -1152,6 +1296,24 @@ export function parseArgs(argv: string[]): CliArgs {
         args.denylistSnapshotPath = readValue(arg, i);
         i += 1;
         break;
+      case '--min-removal-age-days': {
+        const days = Number(readValue(arg, i));
+        if (!Number.isFinite(days) || days < 0) {
+          throw new Error('--min-removal-age-days must be a non-negative number');
+        }
+        args.minRemovalAgeDays = days;
+        i += 1;
+        break;
+      }
+      case '--approval-threshold': {
+        const threshold = Number(readValue(arg, i));
+        if (!Number.isInteger(threshold) || threshold < 1) {
+          throw new Error('--approval-threshold must be a positive integer');
+        }
+        args.approvalThreshold = threshold;
+        i += 1;
+        break;
+      }
       case '--json':
         args.json = true;
         break;
@@ -1202,10 +1364,20 @@ OPTIONS:
   --max-duration <ms>         Hard deadline for the run. When it elapses no new checks start,
                                in-flight checks finish, results are saved and the process
                                exits with code 3 (EXIT_CODE_DEADLINE_EXCEEDED)
-  --denylist-snapshot <path>  Path to JSON file containing an array of the addresses currently
-                               on the denylist
+  --denylist-snapshot <path>  Path to JSON file with the current denylist: an array of address
+                               strings, or objects { address, addedAt } where addedAt is an ISO
+                               date / epoch ms used by --min-removal-age-days
+  --min-removal-age-days <n>   Do not delist entries younger than n days; younger or unknown-age
+                               entries are reported in removalReviewQueue for manual review
+  --approval-threshold <n>     Pause a live sync needing more than n writes; no writes are
+                               submitted and the process exits with code 4
   --dry-run                   Preview output without writing to the contract
-  --json                      Print only the JSON SyncResult on stdout; logs go to stderr
+  --plan                      Print a diff of planned adds/removes with their source
+                               lists and write nothing (implies --dry-run). With
+                               --denylist-snapshot, removals are included in the diff
+  --json                      Print only the JSON result on stdout (includes a machine-
+                               readable \`plan.adds\` / \`plan.removes\` diff in --plan mode);
+                               logs go to stderr
   --audit-log <path>          Append one JSON line per denylist write to <path>
   --checkpoint <path>         Persist completed addresses to <path> and skip them on re-run
   --help, -h                  Show this help message
@@ -1283,13 +1455,37 @@ export async function runCli(argv?: string[]): Promise<void> {
   }
 
   let currentDenylist: string[] | undefined;
+  let denylistAddedAt: Record<string, string | number> | undefined;
   if (args.denylistSnapshotPath) {
     try {
-      const parsed = JSON.parse(fs.readFileSync(args.denylistSnapshotPath, 'utf8'));
-      if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
-        throw new Error('Denylist snapshot must be a JSON array of strings');
+      const parsed = JSON.parse(fs.readFileSync(args.denylistSnapshotPath, 'utf8')) as unknown;
+      if (!Array.isArray(parsed)) {
+        throw new Error('Denylist snapshot must be a JSON array');
       }
-      currentDenylist = parsed;
+      currentDenylist = [];
+      for (const item of parsed) {
+        if (typeof item === 'string') {
+          currentDenylist.push(item);
+          continue;
+        }
+        if (
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as { address?: unknown }).address === 'string' &&
+          ((item as { addedAt?: unknown }).addedAt === undefined ||
+            typeof (item as { addedAt?: unknown }).addedAt === 'string' ||
+            typeof (item as { addedAt?: unknown }).addedAt === 'number')
+        ) {
+          const entry = item as { address: string; addedAt?: string | number };
+          currentDenylist.push(entry.address);
+          if (entry.addedAt !== undefined) {
+            denylistAddedAt ??= {};
+            denylistAddedAt[normalizeStellarAddress(entry.address)] = entry.addedAt;
+          }
+          continue;
+        }
+        throw new Error('Denylist snapshot entries must be strings or { address, addedAt } objects');
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       logger.error(
@@ -1321,7 +1517,7 @@ export async function runCli(argv?: string[]): Promise<void> {
     provider = new RateLimitedSanctionsProvider(provider);
   }
 
-  if (args.dryRun) {
+  if (args.dryRun || args.plan) {
     // Fee estimation needs RPC details and the submitting account; it is
     // skipped (no feeEstimate in the report) when they are not provided.
     const dryRunSecret = process.env.SANCTIONS_ORACLE_SECRET_KEY ?? args.secretKey;
@@ -1343,11 +1539,29 @@ export async function runCli(argv?: string[]): Promise<void> {
         },
       },
       dryRun: true,
+      plan: args.plan,
       logger,
+      maxDurationMs: args.maxDurationMs,
       currentDenylist,
-      reconcile: args.reconcile,
+      denylistAddedAt,
+      minRemovalAgeDays: args.minRemovalAgeDays,
+      // A plan with a snapshot should show removals even without an explicit
+      // --reconcile: the snapshot already identifies the current denylist.
+      reconcile: args.reconcile || (args.plan === true && currentDenylist !== undefined),
       ...(dryRunFeeEstimator ? { feeEstimator: dryRunFeeEstimator } : {}),
     });
+    if (args.plan && result.plan) {
+      const { adds, removes } = result.plan;
+      logger.info(
+        `sanctions-oracle: plan: ${adds.length} add(s), ${removes.length} remove(s)`,
+      );
+      for (const { address, source } of adds) {
+        logger.info(`PLAN ADD ${address} ${source}`);
+      }
+      for (const { address, source } of removes) {
+        logger.info(`PLAN REMOVE ${address} ${source}`);
+      }
+    }
     if (result.feeEstimate?.error) {
       logger.error?.(`sanctions-oracle: ${result.feeEstimate.error}`);
     } else if (result.feeEstimate) {
@@ -1405,7 +1619,11 @@ export async function runCli(argv?: string[]): Promise<void> {
     writer,
     dryRun: false,
     logger,
+    maxDurationMs: args.maxDurationMs,
+    maxAutoWrites: args.approvalThreshold,
     currentDenylist,
+    denylistAddedAt,
+    minRemovalAgeDays: args.minRemovalAgeDays,
     reconcile: args.reconcile,
     checkpoint,
     resume: Boolean(checkpoint),
@@ -1413,7 +1631,14 @@ export async function runCli(argv?: string[]): Promise<void> {
   // CLI-only: machine-readable result to stdout (see dry-run branch above).
   // eslint-disable-next-line no-console
   console.log(JSON.stringify(result, null, 2));
-  if (result.deadlineExceeded) process.exitCode = EXIT_CODE_DEADLINE_EXCEEDED;
+  if (result.approvalRequired) {
+    logger.error(
+      `sanctions-oracle: ${result.approvalRequiredCount} writes require manual approval (threshold ${result.approvalThreshold}); nothing was written`,
+    );
+    process.exitCode = EXIT_CODE_APPROVAL_REQUIRED;
+  } else if (result.deadlineExceeded) {
+    process.exitCode = EXIT_CODE_DEADLINE_EXCEEDED;
+  }
 }
 
 if (require.main === module) {
