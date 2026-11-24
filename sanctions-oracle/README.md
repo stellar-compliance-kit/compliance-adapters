@@ -53,12 +53,14 @@ specific failure types programmatically without parsing log output.
 
 ### Input validation
 
-Every input address is checked with `StrKey.isValidEd25519PublicKey()`
-**before** it reaches the provider. Entries that are not well-formed Stellar
-`G...` public keys (a typo, a truncated paste, a non-Stellar identifier) are
-never checked or written — they are reported in `SyncResult.invalid`, kept
-distinct from `SyncResult.failed` (which means "the provider couldn't
-determine an answer").
+Every input address is checked with `isValidScreeningAddress()` (exported by
+`@compliance-adapters/shared`) **before** it reaches the provider. Valid
+Ed25519 account addresses (`G...`) and Soroban contract addresses (`C...`) are
+both accepted, since sanctioned entities may control contracts. Entries that
+are not well-formed screening addresses (a typo, a truncated paste, a
+non-Stellar identifier) are never checked or written — they are reported in
+`SyncResult.invalid`, kept distinct from `SyncResult.failed` (which means "the
+provider couldn't determine an answer").
 
 ### Address normalization
 
@@ -69,8 +71,8 @@ input and `currentDenylist`, `CsvSanctionsProvider`, `MockSanctionsProvider`,
 (trim, then uppercase, exported by `@compliance-adapters/shared`) before the
 provider lookup, the cache key and the denylist write. Padded or mixed-case
 spellings of one account are checked, cached and written once, under the
-canonical address. Input that is still not a valid `G...` key after
-normalization is reported verbatim in `SyncResult.invalid`.
+canonical address. Input that is still not a valid `G...` or `C...` address
+after normalization is reported verbatim in `SyncResult.invalid`.
 
 ### Delisting with `reconcile`
 
@@ -148,6 +150,23 @@ appends one JSON line (with its ISO 8601 `timestamp`) per denylist write to an
 append-only file. Writes are serialized so concurrent events never interleave;
 set `fsync: true` to flush each line to disk. From the CLI, use
 `--audit-log <path>`.
+
+### Remote audit sinks (S3 / GCS)
+
+Local JSONL files disappear with ephemeral containers. `createS3AuditLogger`
+and `createGcsAuditLogger` implement the same `AuditLogger` interface, writing
+one immutable JSON object per event under `prefix/YYYY/MM/DD/`. Credentials
+come from the AWS default credential chain / GCP ADC; the cloud SDKs
+(`@aws-sdk/client-s3`, `@google-cloud/storage`) are loaded lazily and clients
+can be injected for tests. From the CLI:
+
+```sh
+sanctions-sync --audit-s3 s3://my-bucket/audit/sanctions --audit-gcs gs://my-bucket/audit
+```
+
+Multiple sinks can be combined with `combineAuditLoggers(...)`; every event is
+delivered to all of them. Sink failures never fail a successful on-chain
+write — they are reported through the writer's `logger.error`.
 
 ### Machine-readable CLI output (`--json`)
 
@@ -347,6 +366,36 @@ sanctions_oracle_requests_total{phase="denylist_write",outcome="success"} 3
 # TYPE sanctions_oracle_duration_ms histogram
 sanctions_oracle_duration_ms_bucket{phase="address_check",le="100"} 40
 ...
+```
+
+### Provider freshness gauge
+
+Pass the same registry to `ProviderRegistry` (used as the sync `provider`) to
+record a per-provider gauge of the last successful fetch time:
+
+```ts
+const metrics = new MetricsRegistry();
+const registry = new ProviderRegistry({ policy: 'any-flag-wins', metrics });
+registry.register('ofac-style', ofacProvider);
+
+await syncSanctionsToDenylist({ provider: registry, addresses, writer, metrics });
+// sanctions_oracle_provider_last_success_timestamp_seconds{provider="ofac-style"} 1764000000.000
+```
+
+Failures never advance the timestamp. Example Prometheus alert rule for stale
+provider data:
+
+```yaml
+groups:
+  - name: sanctions-oracle-provider-freshness
+    rules:
+      - alert: SanctionsProviderDataStale
+        expr: time() - sanctions_oracle_provider_last_success_timestamp_seconds{provider=~".+"} > 3600
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Sanctions provider {{ $labels.provider }} has not fetched successfully in over 1h"
 ```
 
 ## Running multiple providers with `ProviderRegistry`

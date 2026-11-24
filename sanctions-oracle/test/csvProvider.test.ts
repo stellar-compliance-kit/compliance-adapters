@@ -236,3 +236,23 @@ describe('CsvSanctionsProvider', () => {
     });
   });
 });
+
+describe('CsvSanctionsProvider — contract addresses', () => {
+  const CONTRACT = 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
+
+  it('loads and flags a valid C... contract address from the CSV watchlist', async () => {
+    const provider = new CsvSanctionsProvider(
+      writeTempCsv(`address,source\n${CONTRACT.toLowerCase()},csv-contract-source\n`),
+    );
+    await expect(provider.checkAddress(CONTRACT)).resolves.toEqual({
+      flagged: true,
+      source: 'csv-contract-source',
+    });
+  });
+
+  it('skips a malformed contract address with a warning', () => {
+    const logger = { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() };
+    new CsvSanctionsProvider(writeTempCsv('address,source\nCBADEXAMPLE,bad-source\n'), { logger });
+    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('G... or C... address'));
+  });
+});

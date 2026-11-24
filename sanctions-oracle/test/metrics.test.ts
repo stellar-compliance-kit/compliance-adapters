@@ -223,3 +223,38 @@ describe('syncSanctionsToDenylist metrics integration', () => {
     expect(result.written).toEqual([FLAGGED_ADDRESS]);
   });
 });
+
+describe('provider freshness gauge', () => {
+  it('records and exposes the last successful fetch time per provider', () => {
+    const reg = new MetricsRegistry({ prefix: 'sanctions_test' });
+    expect(reg.getProviderLastSuccessMs('ofac')).toBeUndefined();
+
+    reg.markProviderSuccess('ofac', 1_764_000_000_500);
+    reg.markProviderSuccess('other-list', 1_764_000_001_000);
+
+    expect(reg.getProviderLastSuccessMs('ofac')).toBe(1_764_000_000_500);
+    expect(reg.getProviderFreshnessSnapshot()).toEqual({
+      ofac: 1_764_000_000_500,
+      'other-list': 1_764_000_001_000,
+    });
+
+    const exposed = reg.expose();
+    expect(exposed).toContain(
+      '# TYPE sanctions_test_provider_last_success_timestamp_seconds gauge',
+    );
+    expect(exposed).toContain(
+      'sanctions_test_provider_last_success_timestamp_seconds{provider="ofac"} 1764000000.500',
+    );
+    expect(exposed).toContain(
+      'sanctions_test_provider_last_success_timestamp_seconds{provider="other-list"} 1764000001.000',
+    );
+  });
+
+  it('no-op registry accepts freshness updates without exposing anything', () => {
+    const reg = new NoopMetricsRegistry();
+    reg.markProviderSuccess('ofac');
+    expect(reg.getProviderLastSuccessMs('ofac')).toBeUndefined();
+    expect(reg.getProviderFreshnessSnapshot()).toEqual({});
+    expect(reg.expose()).toBe('');
+  });
+});

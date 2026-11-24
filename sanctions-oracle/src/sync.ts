@@ -14,7 +14,7 @@ import {
   nativeToScVal,
   rpc,
 } from '@stellar/stellar-sdk';
-import { isValidStellarAddress, normalizeStellarAddress } from '@compliance-adapters/shared';
+import { isValidScreeningAddress, normalizeStellarAddress } from '@compliance-adapters/shared';
 import { type Logger, noopLogger, consoleLogger } from '@compliance-adapters/logger';
 export type { Logger } from '@compliance-adapters/logger';
 import { SanctionsProvider, CheckResult } from './SanctionsProvider';
@@ -25,6 +25,12 @@ import { RateLimitedSanctionsProvider } from './rateLimitedProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { withRetry, RetryOptions } from './retry';
+import { createJsonlAuditLogger } from './auditLog';
+import {
+  combineAuditLoggers,
+  createS3AuditLogger,
+  createGcsAuditLogger,
+} from './auditSinks';
 import { type Signer, toSigner, signTransaction } from './signer';
 import { computeBackoffDelayMs, BackoffOptions } from '@compliance-adapters/backoff';
 
@@ -278,11 +284,10 @@ export interface SyncOptions {
    */
   minScoreToBlock?: number;
   /**
-   * Dry-run only. Estimates the fee (in stroops) of one representative
-   * `add_to_denylist` transaction for the given sample address, e.g. via
-   * {@link createRpcFeeEstimator}. The estimate is multiplied by the number of
-   * pending writes and reported in {@link SyncResult.feeEstimate}. A failing
-   * estimator never fails the dry-run; the error is reported instead.
+   * Dry-run only. Estimates the fee (in stroops) of an `add_to_denylist`
+   * transaction for each pending address, e.g. via {@link createRpcFeeEstimator}.
+   * The estimates are summed and reported in {@link SyncResult.feeEstimate}.
+   * A failing estimator never fails the dry-run; the error is reported instead.
    */
   feeEstimator?: (sampleAddress: string) => Promise<bigint | number | string>;
 }
@@ -291,9 +296,11 @@ export interface SyncOptions {
 export interface FeeEstimate {
   /** Number of `add_to_denylist` writes the live run would submit. */
   pendingWrites: number;
-  /** Simulated fee of one representative transaction, in stroops (decimal string). */
+  /** Simulated fee of the first transaction, in stroops (decimal string). */
   perTxFeeStroops?: string;
-  /** perTxFeeStroops * pendingWrites, in stroops (decimal string). */
+  /** Individual simulated fees, in stroops, in pending-write order. */
+  perWriteFeesStroops?: string[];
+  /** Sum of all per-write estimates, in stroops (decimal string). */
   totalFeeStroops?: string;
   /** totalFeeStroops expressed in XLM (1 XLM = 10,000,000 stroops). */
   totalFeeXlm?: string;
@@ -326,11 +333,16 @@ async function estimateDryRunFee(
     };
   }
   try {
-    const perTx = BigInt(await feeEstimator(pending[0]));
-    const total = perTx * BigInt(pending.length);
+    // Estimate every pending write and sum the results so that varying
+    // transaction costs are reflected in the plan output (rather than
+    // assuming every write costs the same as the first one).
+    const fees = await Promise.all(pending.map((address) => feeEstimator(address)));
+    const stroops = fees.map((fee) => BigInt(fee));
+    const total = stroops.reduce((sum, fee) => sum + fee, BigInt(0));
     return {
       ...estimate,
-      perTxFeeStroops: perTx.toString(),
+      perTxFeeStroops: stroops[0].toString(),
+      perWriteFeesStroops: stroops.map((fee) => fee.toString()),
       totalFeeStroops: total.toString(),
       totalFeeXlm: stroopsToXlm(total),
     };
@@ -387,8 +399,8 @@ export interface SyncResult {
    */
   failedWithReasons: FailedAddress[];
   /**
-   * Input entries that are not valid Stellar Ed25519 public keys (StrKey
-   * `G...`). These are never checked against the provider — a malformed entry
+   * Input entries that are not valid screening addresses (StrKey `G...`
+   * account or `C...` Soroban contract). These are never checked against the provider — a malformed entry
    * (typo, truncated paste, a non-Stellar identifier) is reported here rather
    * than silently landing in neither `flagged` nor `failed`.
    */
@@ -531,7 +543,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   const seenInvalid = new Set<string>();
   addresses.forEach((raw, i) => {
     const address = normalizedInput[i];
-    if (isValidStellarAddress(address)) {
+    if (isValidScreeningAddress(address)) {
       if (!seenValid.has(address)) {
         seenValid.add(address);
         validAddresses.push(address);
@@ -547,7 +559,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   if (reconcile) {
     // Denylist entries must be re-checked to learn whether they were cleared.
     for (const entry of currentDenylistSet) {
-      if (isValidStellarAddress(entry) && !seenValid.has(entry)) {
+      if (isValidScreeningAddress(entry) && !seenValid.has(entry)) {
         seenValid.add(entry);
         validAddresses.push(entry);
       }
@@ -1069,6 +1081,10 @@ export interface CliArgs {
   json?: boolean;
   /** Path to an append-only JSONL file that records every denylist write. */
   auditLogPath?: string;
+  /** `s3://bucket/prefix` destination for remote JSON audit objects. */
+  auditS3Uri?: string;
+  /** `gs://bucket/prefix` destination for remote JSON audit objects. */
+  auditGcsUri?: string;
   /** Path to a checkpoint file; addresses completed by a prior run are skipped. */
   checkpointPath?: string;
 }
@@ -1159,6 +1175,14 @@ export function parseArgs(argv: string[]): CliArgs {
         args.auditLogPath = readValue(arg, i);
         i += 1;
         break;
+      case '--audit-s3':
+        args.auditS3Uri = readValue(arg, i);
+        i += 1;
+        break;
+      case '--audit-gcs':
+        args.auditGcsUri = readValue(arg, i);
+        i += 1;
+        break;
       case '--checkpoint':
         args.checkpointPath = readValue(arg, i);
         i += 1;
@@ -1207,6 +1231,8 @@ OPTIONS:
   --dry-run                   Preview output without writing to the contract
   --json                      Print only the JSON SyncResult on stdout; logs go to stderr
   --audit-log <path>          Append one JSON line per denylist write to <path>
+  --audit-s3 <s3://bucket/prefix>  Write one JSON audit object per event to S3
+  --audit-gcs <gs://bucket/prefix> Write one JSON audit object per event to GCS
   --checkpoint <path>         Persist completed addresses to <path> and skip them on re-run
   --help, -h                  Show this help message
 
@@ -1382,6 +1408,18 @@ export async function runCli(argv?: string[]): Promise<void> {
     ? new FileCheckpointStore(args.checkpointPath, logger)
     : undefined;
 
+  const auditLoggers: AuditLogger[] = [];
+  if (args.auditLogPath) auditLoggers.push(createJsonlAuditLogger(args.auditLogPath));
+  if (args.auditS3Uri) {
+    const [bucket, ...rest] = args.auditS3Uri.replace(/^s3:\/\//, '').split('/');
+    auditLoggers.push(createS3AuditLogger({ bucket, prefix: rest.join('/') || undefined }));
+  }
+  if (args.auditGcsUri) {
+    const [bucket, ...rest] = args.auditGcsUri.replace(/^gs:\/\//, '').split('/');
+    auditLoggers.push(createGcsAuditLogger({ bucket, prefix: rest.join('/') || undefined }));
+  }
+  const auditLogger = auditLoggers.length > 0 ? combineAuditLoggers(...auditLoggers) : undefined;
+
   const writer = createRpcDenylistWriter({
     rpcUrl: args.rpcUrl,
     networkPassphrase: args.networkPassphrase,
@@ -1390,13 +1428,16 @@ export async function runCli(argv?: string[]): Promise<void> {
     ...(process.env.SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY
       ? { feeSource: Keypair.fromSecret(process.env.SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY) }
       : {}),
-    // Every delisting is recorded with the clearing provider's source.
-    ...(args.reconcile
-      ? {
-          auditLogger: (entry: AuditLogEntry) => logger.info('sanctions-oracle: audit', entry),
-          logger,
-        }
-      : {}),
+    // Audit every write and delisting through the configured sink(s). With
+    // no sink configured, still log delistings as before.
+    ...(auditLogger
+      ? { auditLogger, logger }
+      : args.reconcile
+        ? {
+            auditLogger: (entry: AuditLogEntry) => logger.info('sanctions-oracle: audit', entry),
+            logger,
+          }
+        : {}),
   });
 
   const result = await syncSanctionsToDenylist({

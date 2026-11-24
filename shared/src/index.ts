@@ -24,6 +24,23 @@ export function isValidStellarAddress(address: string): boolean {
 }
 
 /**
+ * Validate a Soroban contract address (StrKey `C...` format). Contract IDs can
+ * appear on sanctions lists because sanctioned entities may control contracts.
+ */
+export function isValidContractAddress(address: string): boolean {
+  return StrKey.isValidContract(address);
+}
+
+/**
+ * Validate any address that can be screened by the compliance adapters:
+ * an Ed25519 account (`G...`) or a Soroban contract (`C...`). Muxed accounts
+ * (`M...`) are intentionally excluded.
+ */
+export function isValidScreeningAddress(address: string): boolean {
+  return isValidStellarAddress(address) || isValidContractAddress(address);
+}
+
+/**
  * Canonical form of a Stellar address: surrounding whitespace removed and
  * uppercased. Addresses arriving from CSV files, JSON input or REST providers
  * may be padded or lowercase; normalize them at every ingestion boundary so the

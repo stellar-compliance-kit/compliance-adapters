@@ -116,3 +116,54 @@ describe('syncSanctionsToDenylist — StrKey validation (issue #342)', () => {
     expect(result.checked).toBe(1);
   });
 });
+
+describe('contract (C...) address screening', () => {
+  const CONTRACT = 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
+
+  it('accepts and normalizes a padded lowercase contract address end to end', async () => {
+    const checkAddress = jest.fn().mockResolvedValue({ flagged: true, source: 'test-source' });
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider: { checkAddress },
+      addresses: [`  ${CONTRACT.toLowerCase()}  `],
+      writer,
+    });
+
+    expect(result.invalid).toEqual([]);
+    expect(checkAddress).toHaveBeenCalledWith(CONTRACT);
+    expect(result.written).toEqual([CONTRACT]);
+    expect(writer.addToDenylist).toHaveBeenCalledWith(CONTRACT);
+  });
+
+  it('rejects malformed contract addresses', async () => {
+    const result = await syncSanctionsToDenylist({
+      provider: new MockSanctionsProvider(),
+      addresses: ['CBADEXAMPLE', 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCBAD'],
+      writer: makeFakeWriter(),
+      dryRun: true,
+    });
+
+    expect(result.invalid).toHaveLength(2);
+    expect(result.checked).toBe(0);
+  });
+
+  it('re-checks a C... entry from the current denylist in reconcile mode', async () => {
+    const checkAddress = jest.fn().mockResolvedValue({ flagged: false, source: 'test-source' });
+    const writer: DenylistWriter = {
+      addToDenylist: jest.fn().mockResolvedValue({ hash: 'fakehash' }),
+      removeFromDenylist: jest.fn().mockResolvedValue({ hash: 'removehash' }),
+    };
+
+    const result = await syncSanctionsToDenylist({
+      provider: { checkAddress },
+      addresses: [],
+      currentDenylist: [CONTRACT],
+      reconcile: true,
+      writer,
+    });
+
+    expect(checkAddress).toHaveBeenCalledWith(CONTRACT);
+    expect(result.plannedRemovals).toEqual([{ address: CONTRACT, source: 'test-source' }]);
+  });
+});
