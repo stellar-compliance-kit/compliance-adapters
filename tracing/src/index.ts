@@ -35,6 +35,7 @@
  */
 
 import { randomBytes } from 'crypto';
+import { AsyncLocalStorage } from 'async_hooks';
 import type {
   SpanStatus,
   SpanAttributes,
@@ -42,6 +43,77 @@ import type {
   TracingContext,
 } from '@compliance-adapters/tracing-types';
 export type { SpanStatus, SpanAttributes, SpanData, TracingContext };
+
+// ── Active span context ───────────────────────────────────────────────────────
+
+/**
+ * Active span storage is shared with `@compliance-adapters/logger` through a
+ * global symbol so loggers can automatically attach trace/span IDs without
+ * importing the tracing package at runtime.
+ */
+const ACTIVE_SPAN_KEY = Symbol.for('@compliance-adapters/activeSpanContext');
+
+interface ActiveSpanStore {
+  getStore(): TracingContext | undefined;
+  enterWith(context: TracingContext | undefined): void;
+  run<T>(context: TracingContext | undefined, callback: () => T): T;
+}
+
+interface ActiveSpanState {
+  store: ActiveSpanStore;
+  current?: TracingContext;
+}
+
+function activeSpanState(): ActiveSpanState {
+  const globalRef = globalThis as unknown as Record<symbol, ActiveSpanState | undefined>;
+  if (!globalRef[ACTIVE_SPAN_KEY]) {
+    globalRef[ACTIVE_SPAN_KEY] = {
+      store: new AsyncLocalStorage<TracingContext>() as ActiveSpanStore,
+      current: undefined,
+    };
+  }
+  return globalRef[ACTIVE_SPAN_KEY]!;
+}
+
+/** Return the span context active in the current async execution, if any. */
+export function getActiveSpanContext(): TracingContext | undefined {
+  const state = activeSpanState();
+  const scoped = state.store.getStore();
+  return scoped !== undefined ? scoped : state.current;
+}
+
+/** Make `context` the active span context for the current async execution. */
+export function setActiveSpanContext(context: TracingContext | undefined): void {
+  activeSpanState().current = context;
+}
+
+/** Clear the active span context for the current async execution. */
+export function clearActiveSpanContext(): void {
+  setActiveSpanContext(undefined);
+}
+
+/** Run `callback` with `context` as the active span context. */
+export function withActiveSpanContext<T>(context: TracingContext, callback: () => T): T {
+  return activeSpanState().store.run(context, callback);
+}
+
+/** Activate a live span (or a bare context) for the current async execution. */
+export function setActiveSpan(span: Span | TracingContext | undefined): void {
+  setActiveSpanContext(
+    span && 'traceId' in span && 'spanId' in span
+      ? { traceId: span.traceId, spanId: span.spanId }
+      : span,
+  );
+}
+
+/** Run `callback` with a live span (or bare context) active. */
+export function withActiveSpan<T>(span: Span | TracingContext, callback: () => T): T {
+  const context: TracingContext =
+    'traceId' in span && 'spanId' in span
+      ? { traceId: span.traceId, spanId: span.spanId }
+      : span;
+  return withActiveSpanContext(context, callback);
+}
 
 // ── Span data model ───────────────────────────────────────────────────────────
 
@@ -247,15 +319,22 @@ export class DefaultTracer implements Tracer {
     const spanId = randomHex(8);
     const parentSpanId = parentContext?.spanId;
 
-    return new LiveSpan(
+    const span = new LiveSpan(
       name,
       traceId,
       spanId,
       parentSpanId,
       Date.now(),
       this.options.serviceName,
-      (data) => this.handleSpanEnd(data),
+      (data) => {
+        // Ending the active span stops log correlation for this execution.
+        const current = getActiveSpanContext();
+        if (current?.spanId === data.spanId) clearActiveSpanContext();
+        this.handleSpanEnd(data);
+      },
     );
+    setActiveSpan(span);
+    return span;
   }
 
   extractContext(traceparent: string | undefined): TracingContext | undefined {
@@ -406,11 +485,13 @@ class OtelTracerAdapter implements Tracer {
   startSpan(name: string, _parentContext?: TracingContext): Span {
     const otelSpan = this.otelTracer.startSpan(name);
     const ctx = typeof otelSpan.spanContext === 'function' ? otelSpan.spanContext() : undefined;
-    return new OtelSpanAdapter(
+    const span = new OtelSpanAdapter(
       otelSpan,
       ctx?.traceId ?? randomHex(16),
       ctx?.spanId ?? randomHex(8),
     );
+    setActiveSpan(span);
+    return span;
   }
 
   extractContext(traceparent: string | undefined): TracingContext | undefined {

@@ -3,6 +3,62 @@
  * SPDX-License-Identifier: MIT
  */
 
+import { AsyncLocalStorage } from 'async_hooks';
+
+/** Minimal view of the active trace context (same shape as `TracingContext`). */
+export interface ActiveSpanContext {
+  traceId: string;
+  spanId: string;
+  sampled?: boolean;
+}
+
+/** Shared with `@compliance-adapters/tracing` via a global symbol. */
+const ACTIVE_SPAN_KEY = Symbol.for('@compliance-adapters/activeSpanContext');
+
+interface ActiveSpanStore {
+  getStore(): ActiveSpanContext | undefined;
+  enterWith(context: ActiveSpanContext | undefined): void;
+  run<T>(context: ActiveSpanContext | undefined, callback: () => T): T;
+}
+
+interface ActiveSpanState {
+  store: ActiveSpanStore;
+  current?: ActiveSpanContext;
+}
+
+function activeSpanState(): ActiveSpanState {
+  const globalRef = globalThis as unknown as Record<symbol, ActiveSpanState | undefined>;
+  if (!globalRef[ACTIVE_SPAN_KEY]) {
+    globalRef[ACTIVE_SPAN_KEY] = {
+      store: new AsyncLocalStorage<ActiveSpanContext>() as ActiveSpanStore,
+      current: undefined,
+    };
+  }
+  return globalRef[ACTIVE_SPAN_KEY]!;
+}
+
+/** Read the active span context published by the tracing package. */
+export function getActiveSpanContext(): ActiveSpanContext | undefined {
+  const state = activeSpanState();
+  const scoped = state.store.getStore();
+  return scoped !== undefined ? scoped : state.current;
+}
+
+/** Publish an active span context (normally done by the tracing package). */
+export function setActiveSpanContext(context: ActiveSpanContext | undefined): void {
+  activeSpanState().current = context;
+}
+
+/** Clear the active span context for the current async execution. */
+export function clearActiveSpanContext(): void {
+  setActiveSpanContext(undefined);
+}
+
+/** Run `callback` with `context` active, restoring the previous context after. */
+export function withActiveSpanContext<T>(context: ActiveSpanContext, callback: () => T): T {
+  return activeSpanState().store.run(context, callback);
+}
+
 /**
  * Minimal structured-logging interface shared across all compliance-adapter
  * packages.  Any object that satisfies this shape — console, pino, winston,
@@ -93,6 +149,31 @@ export const noopLogger: Logger = {
   child: () => noopLogger,
 };
 
+/** Append active trace context to a log call, if there is one. */
+function forwardWithTrace(base: Logger, level: LogLevel, args: unknown[]): void {
+  const context = getActiveSpanContext();
+  if (!context?.traceId || !context.spanId) {
+    base[level](...args);
+    return;
+  }
+  base[level](...args, { traceId: context.traceId, spanId: context.spanId });
+}
+
+/**
+ * Decorate any logger so every call automatically carries the active trace
+ * and span IDs. No IDs are added when no span is active.
+ */
+export function createTracingLogger(base: Logger): Logger {
+  return {
+    debug: (...args: unknown[]) => forwardWithTrace(base, 'debug', args),
+    info: (...args: unknown[]) => forwardWithTrace(base, 'info', args),
+    warn: (...args: unknown[]) => forwardWithTrace(base, 'warn', args),
+    error: (...args: unknown[]) => forwardWithTrace(base, 'error', args),
+    child: (bindings: Record<string, unknown>) =>
+      createTracingLogger(getChildLogger(base, bindings)),
+  };
+}
+
 /**
  * The four log levels supported by {@link createLeveledLogger}, ordered from
  * least to most severe.
@@ -129,10 +210,12 @@ const LOG_LEVEL_RANK: Record<LogLevel, number> = {
 export function createLeveledLogger(base: Logger, minLevel: LogLevel): Logger {
   const minRank = LOG_LEVEL_RANK[minLevel];
   const emit = (level: LogLevel, args: unknown[]) => {
-    if (LOG_LEVEL_RANK[level] >= minRank) base[level](...args);
+    if (LOG_LEVEL_RANK[level] >= minRank) forwardWithTrace(base, level, args);
   };
   const emitBound = (level: LogLevel, bindings: Record<string, unknown>, args: unknown[]) => {
-    if (LOG_LEVEL_RANK[level] >= minRank) getChildLogger(base, bindings)[level](...args);
+    if (LOG_LEVEL_RANK[level] >= minRank) {
+      forwardWithTrace(getChildLogger(base, bindings), level, args);
+    }
   };
   return {
     debug: (...args: unknown[]) => emit('debug', args),
@@ -241,7 +324,7 @@ export function createSampledLogger(
   const shouldEmit = (level: LogLevel): boolean =>
     level !== 'debug' || rate >= 1 || (rate > 0 && Math.random() < rate);
   const emit = (level: LogLevel, args: unknown[]) => {
-    if (shouldEmit(level)) base[level](...args);
+    if (shouldEmit(level)) forwardWithTrace(base, level, args);
   };
   return {
     debug: (...args: unknown[]) => emit('debug', args),
@@ -364,7 +447,8 @@ export function createRedactingLogger(
     options.redact
       ? args.map(options.redact)
       : args.map((arg) => redactSensitiveFields(arg, options));
-  const emit = (level: LogLevel, args: unknown[]) => base[level](...redactArgs(args));
+  const emit = (level: LogLevel, args: unknown[]) =>
+    forwardWithTrace(base, level, redactArgs(args));
   return {
     debug: (...args: unknown[]) => emit('debug', args),
     info: (...args: unknown[]) => emit('info', args),
@@ -408,7 +492,12 @@ export function jsonLogger(
       return;
     }
     const { msg, context } = argsToRecord(args);
-    stream.write(JSON.stringify({ time: Date.now(), level, msg, ...context }) + '\n');
+    const traceContext = getActiveSpanContext();
+    const traceFields =
+      traceContext?.traceId && traceContext.spanId
+        ? { traceId: traceContext.traceId, spanId: traceContext.spanId }
+        : {};
+    stream.write(JSON.stringify({ time: Date.now(), level, msg, ...context, ...traceFields }) + '\n');
   };
   return {
     debug: (...args: unknown[]) => emit('debug', args),
