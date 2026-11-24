@@ -202,6 +202,132 @@ function argsToRecord(args: unknown[]): { msg: string; context: Record<string, u
   return { msg: String(first), context: rest.length > 0 ? { data: rest } : {} };
 }
 
+// ── Redaction ─────────────────────────────────────────────────────────────────
+
+/** Value substituted for redacted fields. */
+export const REDACTED = '[REDACTED]';
+
+/**
+ * Field names that are always redacted, even when no custom paths are given.
+ * Matching is case-insensitive on the last path segment.
+ */
+export const DEFAULT_REDACTED_KEYS = [
+  'secret',
+  'secretKey',
+  'privateKey',
+  'apiKey',
+  'password',
+  'passwd',
+  'token',
+  'accessToken',
+  'refreshToken',
+  'authorization',
+  'seed',
+  'mnemonic',
+] as const;
+
+export type RedactorFn = (value: unknown) => unknown;
+
+export interface RedactingLoggerOptions {
+  /** Exact field names to redact at any depth, in addition to the defaults. */
+  keys?: string[];
+  /** Dotted paths to redact. `*` matches one segment, `**` matches any depth. */
+  paths?: string[];
+  /** Value used in place of redacted fields. Defaults to `[REDACTED]`. */
+  replacement?: string;
+  /** Custom redactor applied to every log argument (legacy escape hatch). */
+  redact?: RedactorFn;
+}
+
+function matchesPath(path: string[], pattern: string[]): boolean {
+  if (pattern.length === 0) return path.length === 0;
+  // A bare name matches that field name at any depth.
+  if (pattern.length === 1) {
+    return path.length > 0 && path[path.length - 1].toLowerCase() === pattern[0].toLowerCase();
+  }
+  // A leading wildcard allows the remaining pattern to match at any depth,
+  // so `*.secret` covers both `user.secret` and `a.b.secret`.
+  if (pattern[0] === '*' || pattern[0] === '**') {
+    return matchesPath(path, pattern.slice(1)) || (path.length > 0 && matchesPath(path.slice(1), pattern));
+  }
+  return (
+    path.length > 0 &&
+    path[0].toLowerCase() === pattern[0].toLowerCase() &&
+    matchesPath(path.slice(1), pattern.slice(1))
+  );
+}
+
+const DEFAULT_PATTERNS = DEFAULT_REDACTED_KEYS.map((key) => [key]);
+
+/**
+ * Deep-clone a logged value, replacing fields whose dotted path matches a
+ * configured pattern or a known secret name. Errors and non-objects pass
+ * through untouched.
+ */
+export function redactSensitiveFields(value: unknown, options: RedactingLoggerOptions = {}): unknown {
+  const replacement = options.replacement ?? REDACTED;
+  const patterns = [
+    ...DEFAULT_PATTERNS,
+    ...(options.keys ?? []).map((key) => [key]),
+    ...(options.paths ?? []).map((p) => p.split('.')),
+  ];
+  const seen = new WeakSet<object>();
+
+  const walk = (input: unknown, path: string[]): unknown => {
+    if (input === null || typeof input !== 'object' || input instanceof Error) return input;
+    if (seen.has(input)) return input;
+    seen.add(input);
+    if (Array.isArray(input)) {
+      return input.map((item) => walk(item, [...path, '*']));
+    }
+    if (input instanceof Date || input instanceof RegExp) return input;
+    const result: Record<string, unknown> = {};
+    for (const [key, child] of Object.entries(input)) {
+      const childPath = [...path, key];
+      result[key] = patterns.some((pattern) => matchesPath(childPath, pattern))
+        ? replacement
+        : walk(child, childPath);
+    }
+    return result;
+  };
+
+  return walk(value, []);
+}
+
+/**
+ * Wrap a logger so that sensitive fields are redacted before delegation.
+ *
+ * Known secret names (e.g. `secret`, `privateKey`, `token`) are redacted by
+ * default; callers can add dotted paths such as `*.secret` via `options.paths`.
+ */
+export function createRedactingLogger(
+  base: Logger,
+  keysOrOptions: string[] | RedactorFn | RedactingLoggerOptions,
+): Logger {
+  const options: RedactingLoggerOptions = Array.isArray(keysOrOptions)
+    ? { keys: keysOrOptions }
+    : typeof keysOrOptions === 'function'
+      ? { redact: keysOrOptions }
+      : keysOrOptions;
+  const redactArgs = (args: unknown[]): unknown[] =>
+    options.redact
+      ? args.map(options.redact)
+      : args.map((arg) => redactSensitiveFields(arg, options));
+  const emit = (level: LogLevel, args: unknown[]) => base[level](...redactArgs(args));
+  return {
+    debug: (...args: unknown[]) => emit('debug', args),
+    info: (...args: unknown[]) => emit('info', args),
+    warn: (...args: unknown[]) => emit('warn', args),
+    error: (...args: unknown[]) => emit('error', args),
+    child: (bindings: Record<string, unknown>) => {
+      const safeBindings = (
+        options.redact ? options.redact(bindings) : redactSensitiveFields(bindings, options)
+      ) as Record<string, unknown>;
+      return createRedactingLogger(getChildLogger(base, safeBindings), keysOrOptions);
+    },
+  };
+}
+
 /**
  * Create a JSON structured logger that writes one JSON object per line.
  *
