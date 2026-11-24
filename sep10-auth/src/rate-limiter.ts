@@ -11,6 +11,12 @@ export interface RateLimiterOptions {
   keyGenerator?: (req: import('express').Request) => string;
   store?: RateLimitStore;
   /**
+   * When `true` (the default), every response includes the IETF draft
+   * `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` headers.
+   * Set to `false` to suppress them.
+   */
+  standardHeaders?: boolean;
+  /**
    * Return `true` (or a promise resolving to `true`) to exempt a request from
    * rate limiting, e.g. internal health checkers or trusted partner IPs.
    * Skipped requests never consume tokens.
