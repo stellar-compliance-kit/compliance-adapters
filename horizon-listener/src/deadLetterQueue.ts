@@ -18,11 +18,43 @@ export interface DeadLetterEvent {
 export interface DeadLetterQueue {
   /** Suitable as (or from within) `onEventFailure`. */
   enqueue(event: RawContractEvent, error: unknown): Promise<void>;
-  /** Returns a copy of all stored entries in insertion order. */
-  getAll(): DeadLetterEvent[];
+  /** Returns a copy of all stored entries in insertion order (may be async). */
+  getAll(): DeadLetterEvent[] | Promise<DeadLetterEvent[]>;
   /** Removes the first entry for `eventId`; resolves `false` if none exists. */
   remove(eventId: string): Promise<boolean>;
   clear(): Promise<void>;
+}
+
+/** Minimal metrics surface needed to expose the current DLQ size. */
+export interface DlqSizeMetrics {
+  setDlqSize(size: number): void;
+}
+
+/** Bounds applied when new dead letters are enqueued. */
+export interface DeadLetterQueueLimits {
+  /** Maximum number of entries. Unlimited when omitted. */
+  maxEntries?: number;
+  /** Maximum total serialized bytes. Unlimited when omitted. */
+  maxBytes?: number;
+  /**
+   * What to do when a new entry would exceed a limit: evict the oldest entry
+   * (default) or reject the new entry with {@link DeadLetterQueueFullError}.
+   */
+  overflow?: 'evict-oldest' | 'refuse';
+  /** Optional registry used to publish the `<prefix>_dlq_size` gauge. */
+  metrics?: DlqSizeMetrics;
+}
+
+/** Thrown by bounded queues configured with `overflow: 'refuse'`. */
+export class DeadLetterQueueFullError extends Error {
+  constructor(message = 'dead-letter queue is full') {
+    super(message);
+    this.name = 'DeadLetterQueueFullError';
+  }
+}
+
+function entryBytes(entry: DeadLetterEvent): number {
+  return Buffer.byteLength(JSON.stringify(entry), 'utf-8');
 }
 
 function toEntry(event: RawContractEvent, error: unknown): DeadLetterEvent {
@@ -36,9 +68,43 @@ function toEntry(event: RawContractEvent, error: unknown): DeadLetterEvent {
 
 export class InMemoryDeadLetterQueue implements DeadLetterQueue {
   protected entries: DeadLetterEvent[] = [];
+  protected readonly limits: DeadLetterQueueLimits;
+
+  constructor(limits: DeadLetterQueueLimits = {}) {
+    this.limits = limits;
+  }
+
+  /** Current number of queued entries. */
+  size(): number {
+    return this.entries.length;
+  }
+
+  protected recordSize(): void {
+    this.limits.metrics?.setDlqSize(this.entries.length);
+  }
+
+  /** Enforce configured bounds, evicting oldest entries when appropriate. */
+  protected applyLimits(entry: DeadLetterEvent): boolean {
+    const { maxEntries, maxBytes, overflow = 'evict-oldest' } = this.limits;
+    const bytes = () => this.entries.reduce((sum, e) => sum + entryBytes(e), 0);
+    const fits = () =>
+      (maxEntries === undefined || this.entries.length < maxEntries) &&
+      (maxBytes === undefined || bytes() + entryBytes(entry) <= maxBytes);
+    if (fits()) return true;
+    if (overflow === 'refuse') {
+      throw new DeadLetterQueueFullError();
+    }
+    while (this.entries.length > 0 && !fits()) {
+      this.entries.shift();
+    }
+    return fits();
+  }
 
   async enqueue(event: RawContractEvent, error: unknown): Promise<void> {
-    this.entries.push(toEntry(event, error));
+    const entry = toEntry(event, error);
+    if (!this.applyLimits(entry)) return;
+    this.entries.push(entry);
+    this.recordSize();
   }
 
   getAll(): DeadLetterEvent[] {
@@ -49,11 +115,13 @@ export class InMemoryDeadLetterQueue implements DeadLetterQueue {
     const index = this.entries.findIndex((entry) => entry.event.id === eventId);
     if (index === -1) return false;
     this.entries.splice(index, 1);
+    this.recordSize();
     return true;
   }
 
   async clear(): Promise<void> {
     this.entries = [];
+    this.recordSize();
   }
 }
 
@@ -63,8 +131,11 @@ export class InMemoryDeadLetterQueue implements DeadLetterQueue {
  * `enqueue` calls cannot interleave or lose data.
  */
 export class FileDeadLetterQueue extends InMemoryDeadLetterQueue {
-  constructor(private readonly filePath: string) {
-    super();
+  constructor(
+    private readonly filePath: string,
+    limits: DeadLetterQueueLimits = {},
+  ) {
+    super(limits);
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     if (fs.existsSync(filePath)) {
       this.entries = fs
@@ -75,6 +146,7 @@ export class FileDeadLetterQueue extends InMemoryDeadLetterQueue {
     } else {
       fs.writeFileSync(filePath, '');
     }
+    this.recordSize();
   }
 
   getFilePath(): string {
@@ -83,8 +155,12 @@ export class FileDeadLetterQueue extends InMemoryDeadLetterQueue {
 
   override async enqueue(event: RawContractEvent, error: unknown): Promise<void> {
     const entry = toEntry(event, error);
-    fs.appendFileSync(this.filePath, JSON.stringify(entry) + '\n');
+    if (!this.applyLimits(entry)) return;
     this.entries.push(entry);
+    // Eviction rewrites the whole file; a plain append would resurrect
+    // entries that were just dropped from memory.
+    this.persist();
+    this.recordSize();
   }
 
   override async remove(eventId: string): Promise<boolean> {
@@ -132,7 +208,8 @@ export async function replayDeadLetterQueue(
   options: ReplayDeadLetterQueueOptions,
 ): Promise<ReplayDeadLetterQueueResult> {
   const { queue, send, dryRun = false, limit } = options;
-  const entries = queue.getAll().slice(0, limit ?? Number.MAX_SAFE_INTEGER);
+  const all = await queue.getAll();
+  const entries = all.slice(0, limit ?? Number.MAX_SAFE_INTEGER);
   let delivered = 0;
   let failed = 0;
   for (const entry of entries) {

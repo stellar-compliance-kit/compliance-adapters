@@ -54,6 +54,7 @@ export type MetricsRegistryOptions = Omit<
 export class MetricsRegistry extends GenericMetricsRegistry<Phase> {
   private readonly gaugePrefix: string;
   private ledgerLag = 0;
+  private dlqSize = 0;
 
   constructor(options: MetricsRegistryOptions = {}) {
     const prefix = options.prefix ?? 'horizon_listener';
@@ -70,12 +71,24 @@ export class MetricsRegistry extends GenericMetricsRegistry<Phase> {
     return this.ledgerLag;
   }
 
+  /** Sets the `<prefix>_dlq_size` gauge (current dead-letter queue depth). */
+  setDlqSize(size: number): void {
+    this.dlqSize = size;
+  }
+
+  getDlqSize(): number {
+    return this.dlqSize;
+  }
+
   override expose(): string {
-    const name = `${this.gaugePrefix}_ledger_lag`;
+    const lagName = `${this.gaugePrefix}_ledger_lag`;
+    const dlqName = `${this.gaugePrefix}_dlq_size`;
     return (
       super.expose() +
-      `# HELP ${name} Latest ledger minus last processed ledger\n` +
-      `# TYPE ${name} gauge\n${name} ${this.ledgerLag}\n`
+      `# HELP ${lagName} Latest ledger minus last processed ledger\n` +
+      `# TYPE ${lagName} gauge\n${lagName} ${this.ledgerLag}\n` +
+      `# HELP ${dlqName} Current number of dead-lettered events\n` +
+      `# TYPE ${dlqName} gauge\n${dlqName} ${this.dlqSize}\n`
     );
   }
 }
@@ -88,6 +101,12 @@ export class NoopMetricsRegistry extends GenericNoopMetricsRegistry<Phase> {
   setLedgerLag(_lag: number): void {}
 
   getLedgerLag(): number {
+    return 0;
+  }
+
+  setDlqSize(_size: number): void {}
+
+  getDlqSize(): number {
     return 0;
   }
 }
