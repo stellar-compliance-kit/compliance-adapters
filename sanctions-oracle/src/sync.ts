@@ -278,11 +278,10 @@ export interface SyncOptions {
    */
   minScoreToBlock?: number;
   /**
-   * Dry-run only. Estimates the fee (in stroops) of one representative
-   * `add_to_denylist` transaction for the given sample address, e.g. via
-   * {@link createRpcFeeEstimator}. The estimate is multiplied by the number of
-   * pending writes and reported in {@link SyncResult.feeEstimate}. A failing
-   * estimator never fails the dry-run; the error is reported instead.
+   * Dry-run only. Estimates the fee (in stroops) of an `add_to_denylist`
+   * transaction for each pending address, e.g. via {@link createRpcFeeEstimator}.
+   * The estimates are summed and reported in {@link SyncResult.feeEstimate}.
+   * A failing estimator never fails the dry-run; the error is reported instead.
    */
   feeEstimator?: (sampleAddress: string) => Promise<bigint | number | string>;
 }
@@ -291,9 +290,11 @@ export interface SyncOptions {
 export interface FeeEstimate {
   /** Number of `add_to_denylist` writes the live run would submit. */
   pendingWrites: number;
-  /** Simulated fee of one representative transaction, in stroops (decimal string). */
+  /** Simulated fee of the first transaction, in stroops (decimal string). */
   perTxFeeStroops?: string;
-  /** perTxFeeStroops * pendingWrites, in stroops (decimal string). */
+  /** Individual simulated fees, in stroops, in pending-write order. */
+  perWriteFeesStroops?: string[];
+  /** Sum of all per-write estimates, in stroops (decimal string). */
   totalFeeStroops?: string;
   /** totalFeeStroops expressed in XLM (1 XLM = 10,000,000 stroops). */
   totalFeeXlm?: string;
@@ -326,11 +327,16 @@ async function estimateDryRunFee(
     };
   }
   try {
-    const perTx = BigInt(await feeEstimator(pending[0]));
-    const total = perTx * BigInt(pending.length);
+    // Estimate every pending write and sum the results so that varying
+    // transaction costs are reflected in the plan output (rather than
+    // assuming every write costs the same as the first one).
+    const fees = await Promise.all(pending.map((address) => feeEstimator(address)));
+    const stroops = fees.map((fee) => BigInt(fee));
+    const total = stroops.reduce((sum, fee) => sum + fee, BigInt(0));
     return {
       ...estimate,
-      perTxFeeStroops: perTx.toString(),
+      perTxFeeStroops: stroops[0].toString(),
+      perWriteFeesStroops: stroops.map((fee) => fee.toString()),
       totalFeeStroops: total.toString(),
       totalFeeXlm: stroopsToXlm(total),
     };
