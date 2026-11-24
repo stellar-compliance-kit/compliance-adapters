@@ -45,8 +45,50 @@ export type MetricsRegistryOptions = Omit<
  * use the built-in no-op registry — there is zero overhead.
  */
 export class MetricsRegistry extends GenericMetricsRegistry<SanctionsPhase> {
+  private readonly gaugePrefix: string;
+  private readonly providerLastSuccessMs = new Map<string, number>();
+
   constructor(options: MetricsRegistryOptions = {}) {
-    super({ ...options, prefix: options.prefix ?? 'sanctions_oracle', phases: PHASES });
+    const prefix = options.prefix ?? 'sanctions_oracle';
+    super({ ...options, prefix, phases: PHASES });
+    this.gaugePrefix = prefix;
+  }
+
+  /**
+   * Records a successful fetch for a named provider. Pass `timestampMs` to
+   * inject a clock in tests; defaults to `Date.now()`.
+   */
+  markProviderSuccess(provider: string, timestampMs: number = Date.now()): void {
+    this.providerLastSuccessMs.set(provider, timestampMs);
+  }
+
+  /** Unix epoch milliseconds of the provider's last successful fetch. */
+  getProviderLastSuccessMs(provider: string): number | undefined {
+    return this.providerLastSuccessMs.get(provider);
+  }
+
+  /** Snapshot of all known provider freshness timestamps, keyed by provider. */
+  getProviderFreshnessSnapshot(): Record<string, number> {
+    return Object.fromEntries(this.providerLastSuccessMs);
+  }
+
+  /**
+   * Prometheus exposition including a per-provider gauge of the last
+   * successful fetch time (Unix seconds). Scrape with
+   * `time() - sanctions_oracle_provider_last_success_timestamp_seconds` to
+   * alert on stale provider data.
+   */
+  override expose(): string {
+    const name = `${this.gaugePrefix}_provider_last_success_timestamp_seconds`;
+    const lines = [
+      `# HELP ${name} Unix timestamp of the last successful fetch per provider`,
+      `# TYPE ${name} gauge`,
+    ];
+    for (const [provider, timestampMs] of this.providerLastSuccessMs) {
+      const label = provider.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+      lines.push(`${name}{provider="${label}"} ${(timestampMs / 1000).toFixed(3)}`);
+    }
+    return super.expose() + lines.join('\n') + '\n';
   }
 }
 
@@ -54,6 +96,16 @@ export class MetricsRegistry extends GenericMetricsRegistry<SanctionsPhase> {
  * A no-op registry that discards all observations.
  * Used as the default so callers that don't provide a registry pay no cost.
  */
-export class NoopMetricsRegistry extends GenericNoopMetricsRegistry<SanctionsPhase> {}
+export class NoopMetricsRegistry extends GenericNoopMetricsRegistry<SanctionsPhase> {
+  markProviderSuccess(_provider: string, _timestampMs?: number): void {}
+
+  getProviderLastSuccessMs(_provider: string): number | undefined {
+    return undefined;
+  }
+
+  getProviderFreshnessSnapshot(): Record<string, number> {
+    return {};
+  }
+}
 
 export type AnyMetricsRegistry = MetricsRegistry | NoopMetricsRegistry;

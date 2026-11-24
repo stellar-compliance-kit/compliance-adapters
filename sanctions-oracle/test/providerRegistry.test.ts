@@ -1,6 +1,7 @@
 import { SanctionsProvider } from '../src/SanctionsProvider';
 import { ProviderRegistry, ProviderRegistryAllProvidersFailedError } from '../src/ProviderRegistry';
 import { syncSanctionsToDenylist, DenylistWriter } from '../src/sync';
+import { MetricsRegistry } from '../src/metrics';
 
 // A valid Stellar Ed25519 StrKey (syncSanctionsToDenylist rejects malformed
 // input before it reaches the provider — see issue #342).
@@ -459,5 +460,28 @@ describe('ProviderRegistry', () => {
       expect(migratedResult.source).toBe('new-provider:new-list');
       expect(migratedResult.flagged).toBe(true);
     });
+  });
+});
+
+describe('ProviderRegistry provider freshness', () => {
+  it('records successful provider checks in the freshness gauge but not failures', async () => {
+    const metrics = new MetricsRegistry();
+    const registry = new ProviderRegistry({ policy: 'any-flag-wins', metrics });
+    registry.register('working', fakeProvider(false, 'list-a'));
+    registry.register('broken', throwingProvider('upstream down'));
+
+    const before = Date.now();
+    await registry.checkAddressDetailed(ADDRESS);
+    const after = Date.now();
+
+    const working = registry.getLastSuccessfulFetchAt('working');
+    expect(working).toBeGreaterThanOrEqual(before);
+    expect(working).toBeLessThanOrEqual(after);
+    expect(registry.getLastSuccessfulFetchAt('broken')).toBeUndefined();
+    expect(metrics.getProviderLastSuccessMs('working')).toBe(working);
+    expect(metrics.expose()).toContain(
+      'sanctions_oracle_provider_last_success_timestamp_seconds{provider="working"}',
+    );
+    expect(metrics.expose()).not.toContain('provider="broken"');
   });
 });

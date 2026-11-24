@@ -351,6 +351,36 @@ sanctions_oracle_duration_ms_bucket{phase="address_check",le="100"} 40
 ...
 ```
 
+### Provider freshness gauge
+
+Pass the same registry to `ProviderRegistry` (used as the sync `provider`) to
+record a per-provider gauge of the last successful fetch time:
+
+```ts
+const metrics = new MetricsRegistry();
+const registry = new ProviderRegistry({ policy: 'any-flag-wins', metrics });
+registry.register('ofac-style', ofacProvider);
+
+await syncSanctionsToDenylist({ provider: registry, addresses, writer, metrics });
+// sanctions_oracle_provider_last_success_timestamp_seconds{provider="ofac-style"} 1764000000.000
+```
+
+Failures never advance the timestamp. Example Prometheus alert rule for stale
+provider data:
+
+```yaml
+groups:
+  - name: sanctions-oracle-provider-freshness
+    rules:
+      - alert: SanctionsProviderDataStale
+        expr: time() - sanctions_oracle_provider_last_success_timestamp_seconds{provider=~".+"} > 3600
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Sanctions provider {{ $labels.provider }} has not fetched successfully in over 1h"
+```
+
 ## Running multiple providers with `ProviderRegistry`
 
 Real deployments often want to check an address against more than one

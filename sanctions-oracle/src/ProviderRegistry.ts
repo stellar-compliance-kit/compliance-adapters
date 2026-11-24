@@ -4,6 +4,10 @@
  */
 
 import { SanctionsProvider, CheckResult } from './SanctionsProvider';
+import {
+  type AnyMetricsRegistry,
+  NoopMetricsRegistry,
+} from './metrics';
 
 export type ConflictResolutionPolicy = 'any-flag-wins' | 'majority-vote' | 'priority-override';
 
@@ -24,6 +28,12 @@ export interface ProviderRegistryOptions {
    * Only consulted by the 'majority-vote' policy. Default 'flag' (fail-closed).
    */
   tieBreak?: TieBreak;
+  /**
+   * Optional metrics registry. When supplied, every successful provider check
+   * updates the `provider_last_success_timestamp_seconds` gauge so stale
+   * provider data can be alerted on.
+   */
+  metrics?: AnyMetricsRegistry;
 }
 
 export interface RegisterOptions {
@@ -68,6 +78,7 @@ interface RegisteredProvider {
   provider: SanctionsProvider;
   priority: number;
   registrationIndex: number;
+  lastSuccessfulFetchAt?: number;
 }
 
 const DEFAULT_PRIORITY = Number.POSITIVE_INFINITY;
@@ -87,12 +98,14 @@ export class ProviderRegistry implements SanctionsProvider {
   private readonly policy: ConflictResolutionPolicy;
   private readonly onProviderError: ProviderErrorMode;
   private readonly tieBreak: TieBreak;
+  private readonly metrics: AnyMetricsRegistry;
   private nextRegistrationIndex = 0;
 
   constructor(options: ProviderRegistryOptions) {
     this.policy = options.policy;
     this.onProviderError = options.onProviderError ?? 'ignore';
     this.tieBreak = options.tieBreak ?? 'flag';
+    this.metrics = options.metrics ?? new NoopMetricsRegistry();
   }
 
   register(name: string, provider: SanctionsProvider, options: RegisterOptions = {}): void {
@@ -113,6 +126,14 @@ export class ProviderRegistry implements SanctionsProvider {
 
   listProviders(): string[] {
     return Array.from(this.providers.keys());
+  }
+
+  /**
+   * Unix epoch milliseconds of a provider's last successful check, or
+   * `undefined` if it has never answered successfully.
+   */
+  getLastSuccessfulFetchAt(name: string): number | undefined {
+    return this.providers.get(name)?.lastSuccessfulFetchAt;
   }
 
   async checkAddress(address: string): Promise<CheckResult> {
@@ -162,6 +183,11 @@ export class ProviderRegistry implements SanctionsProvider {
 
     for (const settledEntry of settled) {
       if ('outcome' in settledEntry) {
+        // Record freshness only for a successful fetch; failures never
+        // advance the provider's last-successful timestamp.
+        const now = Date.now();
+        settledEntry.entry.lastSuccessfulFetchAt = now;
+        this.metrics.markProviderSuccess(settledEntry.entry.name, now);
         results.push(settledEntry.outcome);
       } else {
         errors.push({ name: settledEntry.entry.name, error: settledEntry.error });
