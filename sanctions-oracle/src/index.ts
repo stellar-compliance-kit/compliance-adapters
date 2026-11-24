@@ -28,6 +28,15 @@ export {
 } from './sync';
 export { SyncCheckpointStore, InMemoryCheckpointStore, FileCheckpointStore } from './checkpoint';
 export { createJsonlAuditLogger, JsonlAuditLoggerOptions } from './auditLog';
+export {
+  createS3AuditLogger,
+  createGcsAuditLogger,
+  combineAuditLoggers,
+  S3AuditSinkOptions,
+  GcsAuditSinkOptions,
+  S3PutObjectClient,
+  GcsStorageClient,
+} from './auditSinks';
 export { withRetry, RetryOptions } from './retry';
 export {
   ProviderRegistry,

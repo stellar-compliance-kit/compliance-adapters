@@ -151,6 +151,23 @@ append-only file. Writes are serialized so concurrent events never interleave;
 set `fsync: true` to flush each line to disk. From the CLI, use
 `--audit-log <path>`.
 
+### Remote audit sinks (S3 / GCS)
+
+Local JSONL files disappear with ephemeral containers. `createS3AuditLogger`
+and `createGcsAuditLogger` implement the same `AuditLogger` interface, writing
+one immutable JSON object per event under `prefix/YYYY/MM/DD/`. Credentials
+come from the AWS default credential chain / GCP ADC; the cloud SDKs
+(`@aws-sdk/client-s3`, `@google-cloud/storage`) are loaded lazily and clients
+can be injected for tests. From the CLI:
+
+```sh
+sanctions-sync --audit-s3 s3://my-bucket/audit/sanctions --audit-gcs gs://my-bucket/audit
+```
+
+Multiple sinks can be combined with `combineAuditLoggers(...)`; every event is
+delivered to all of them. Sink failures never fail a successful on-chain
+write — they are reported through the writer's `logger.error`.
+
 ### Machine-readable CLI output (`--json`)
 
 With `--json`, stdout contains only the final `SyncResult` as JSON and all

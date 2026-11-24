@@ -25,6 +25,12 @@ import { RateLimitedSanctionsProvider } from './rateLimitedProvider';
 import { type AnyTracer, NoopTracer } from './tracing';
 import { type AnyMetricsRegistry, NoopMetricsRegistry } from './metrics';
 import { withRetry, RetryOptions } from './retry';
+import { createJsonlAuditLogger } from './auditLog';
+import {
+  combineAuditLoggers,
+  createS3AuditLogger,
+  createGcsAuditLogger,
+} from './auditSinks';
 import { type Signer, toSigner, signTransaction } from './signer';
 import { computeBackoffDelayMs, BackoffOptions } from '@compliance-adapters/backoff';
 
@@ -1075,6 +1081,10 @@ export interface CliArgs {
   json?: boolean;
   /** Path to an append-only JSONL file that records every denylist write. */
   auditLogPath?: string;
+  /** `s3://bucket/prefix` destination for remote JSON audit objects. */
+  auditS3Uri?: string;
+  /** `gs://bucket/prefix` destination for remote JSON audit objects. */
+  auditGcsUri?: string;
   /** Path to a checkpoint file; addresses completed by a prior run are skipped. */
   checkpointPath?: string;
 }
@@ -1165,6 +1175,14 @@ export function parseArgs(argv: string[]): CliArgs {
         args.auditLogPath = readValue(arg, i);
         i += 1;
         break;
+      case '--audit-s3':
+        args.auditS3Uri = readValue(arg, i);
+        i += 1;
+        break;
+      case '--audit-gcs':
+        args.auditGcsUri = readValue(arg, i);
+        i += 1;
+        break;
       case '--checkpoint':
         args.checkpointPath = readValue(arg, i);
         i += 1;
@@ -1213,6 +1231,8 @@ OPTIONS:
   --dry-run                   Preview output without writing to the contract
   --json                      Print only the JSON SyncResult on stdout; logs go to stderr
   --audit-log <path>          Append one JSON line per denylist write to <path>
+  --audit-s3 <s3://bucket/prefix>  Write one JSON audit object per event to S3
+  --audit-gcs <gs://bucket/prefix> Write one JSON audit object per event to GCS
   --checkpoint <path>         Persist completed addresses to <path> and skip them on re-run
   --help, -h                  Show this help message
 
@@ -1388,6 +1408,18 @@ export async function runCli(argv?: string[]): Promise<void> {
     ? new FileCheckpointStore(args.checkpointPath, logger)
     : undefined;
 
+  const auditLoggers: AuditLogger[] = [];
+  if (args.auditLogPath) auditLoggers.push(createJsonlAuditLogger(args.auditLogPath));
+  if (args.auditS3Uri) {
+    const [bucket, ...rest] = args.auditS3Uri.replace(/^s3:\/\//, '').split('/');
+    auditLoggers.push(createS3AuditLogger({ bucket, prefix: rest.join('/') || undefined }));
+  }
+  if (args.auditGcsUri) {
+    const [bucket, ...rest] = args.auditGcsUri.replace(/^gs:\/\//, '').split('/');
+    auditLoggers.push(createGcsAuditLogger({ bucket, prefix: rest.join('/') || undefined }));
+  }
+  const auditLogger = auditLoggers.length > 0 ? combineAuditLoggers(...auditLoggers) : undefined;
+
   const writer = createRpcDenylistWriter({
     rpcUrl: args.rpcUrl,
     networkPassphrase: args.networkPassphrase,
@@ -1396,13 +1428,16 @@ export async function runCli(argv?: string[]): Promise<void> {
     ...(process.env.SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY
       ? { feeSource: Keypair.fromSecret(process.env.SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY) }
       : {}),
-    // Every delisting is recorded with the clearing provider's source.
-    ...(args.reconcile
-      ? {
-          auditLogger: (entry: AuditLogEntry) => logger.info('sanctions-oracle: audit', entry),
-          logger,
-        }
-      : {}),
+    // Audit every write and delisting through the configured sink(s). With
+    // no sink configured, still log delistings as before.
+    ...(auditLogger
+      ? { auditLogger, logger }
+      : args.reconcile
+        ? {
+            auditLogger: (entry: AuditLogEntry) => logger.info('sanctions-oracle: audit', entry),
+            logger,
+          }
+        : {}),
   });
 
   const result = await syncSanctionsToDenylist({
