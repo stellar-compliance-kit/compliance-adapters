@@ -53,6 +53,10 @@ export interface TracingContext {
   traceId: string;
   spanId: string;
   /**
+   * Opaque W3C `tracestate` header value (vendor-specific key/value list).
+   * Passed through unchanged so downstream vendors keep their state.
+   */
+  traceState?: string;
    * Sampling decision carried via W3C trace-flags (`01` = sampled).
    * When present, child spans inherit it (parent-based sampling).
    */

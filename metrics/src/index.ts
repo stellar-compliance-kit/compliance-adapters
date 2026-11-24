@@ -283,6 +283,8 @@ export interface MetricsRegistryOptions<Phase extends string> {
 export class MetricsRegistry<Phase extends string> {
   readonly counter: Counter<Phase>;
   readonly histogram: Histogram<Phase>;
+  readonly prefix: string;
+  readonly phases: readonly Phase[];
   readonly gauge: Gauge<Phase>;
   private readonly prefix: string;
   private readonly phases: Phase[];
@@ -380,5 +382,25 @@ export class NoopMetricsRegistry<Phase extends string> {
   }
 }
 
+/**
+ * Options accepted by a package's phase-bound registry: everything from
+ * `MetricsRegistryOptions` except `phases`, with an optional `prefix` that
+ * falls back to the package default.
+ */
+export type PhaseMetricsRegistryOptions<Phase extends string> = Omit<
+  MetricsRegistryOptions<Phase>,
+  'phases' | 'prefix'
+> & {
+  prefix?: string;
+};
+
 export type AnyMetricsRegistry<Phase extends string> =
   MetricsRegistry<Phase> | NoopMetricsRegistry<Phase>;
+
+export { metricsHandler, PROMETHEUS_CONTENT_TYPE } from './handler';
+export {
+  OtlpMetricsExporter,
+  toOtlpMetrics,
+  type OtlpMetricsExporterOptions,
+  type OtlpExportRequest,
+} from './otlp';

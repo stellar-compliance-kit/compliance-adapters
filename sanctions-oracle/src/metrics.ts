@@ -16,27 +16,21 @@
 import {
   MetricsRegistry as GenericMetricsRegistry,
   NoopMetricsRegistry as GenericNoopMetricsRegistry,
-  DEFAULT_HISTOGRAM_BUCKETS,
   type Counter,
   type Histogram,
   type Outcome,
-  type MetricsRegistryOptions as GenericMetricsRegistryOptions,
+  type PhaseMetricsRegistryOptions,
 } from '@compliance-adapters/metrics';
 
-export { DEFAULT_HISTOGRAM_BUCKETS };
+export { DEFAULT_HISTOGRAM_BUCKETS, metricsHandler, OtlpMetricsExporter } from '@compliance-adapters/metrics';
 export type { Counter, Histogram, Outcome };
 
 export type SanctionsPhase = 'address_check' | 'denylist_write';
 
 const PHASES: SanctionsPhase[] = ['address_check', 'denylist_write'];
 
-export type MetricsRegistryOptions = Omit<
-  GenericMetricsRegistryOptions<SanctionsPhase>,
-  'phases' | 'prefix'
-> & {
-  /** Prefix prepended to every metric name (default: `sanctions_oracle`). */
-  prefix?: string;
-};
+/** `prefix` defaults to `sanctions_oracle`. */
+export type MetricsRegistryOptions = PhaseMetricsRegistryOptions<SanctionsPhase>;
 
 /**
  * Holds a counter and a histogram for sanctions-oracle phases.

@@ -257,6 +257,13 @@ export class HttpWebhookSender implements WebhookSender {
         : undefined;
     if (traceparent) {
       headers['traceparent'] = traceparent;
+      // Pass vendor tracestate through unchanged from the parent context
+      const tracestate = this.parentContext
+        ? this.tracer.injectTraceState(this.parentContext)
+        : undefined;
+      if (tracestate) {
+        headers['tracestate'] = tracestate;
+      }
     }
 
     let lastError: Error | undefined;
