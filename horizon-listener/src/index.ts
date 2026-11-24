@@ -38,7 +38,18 @@ export {
 } from './deadLetterQueue';
 export { computeBackoffDelayMs, type BackoffOptions } from '@compliance-adapters/backoff';
 export { HttpWebhookSender, WebhookHttpError, verifyWebhookSignature, type WebhookSender, type HttpWebhookSenderOptions } from './webhook';
-export { createWebhookForwarder, type WebhookForwarderOptions } from './factory';
+export {
+  createWebhookForwarder,
+  createForwarder,
+  type WebhookForwarderOptions,
+  type ForwarderOptions,
+} from './factory';
+export {
+  KafkaForwarder,
+  type EventForwarder,
+  type KafkaForwarderOptions,
+  type KafkaProducer,
+} from './forwarder';
 export {
   MetricsRegistry,
   NoopMetricsRegistry,

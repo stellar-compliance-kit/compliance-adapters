@@ -11,4 +11,5 @@ export * from './rate-limiter';
 export * from './jwt';
 export * from './router';
 export * from './errors';
+export * from './clientDomainCache';
 export type { Logger } from '@compliance-adapters/logger';

@@ -148,7 +148,7 @@ npx compliance-adapters sync-sanctions --dry-run --addresses ./sanctions-oracle/
 
 Run `npx compliance-adapters --help` for available commands and `npx compliance-adapters sync-sanctions --help` for command-specific options.
 
-To run sync on a schedule, see [`docs/deploy/`](./docs/deploy/README.md) for a Kubernetes CronJob and a systemd service + timer.
+To run sync on a schedule, see [`docs/deploy/`](./docs/deploy/README.md) for a Kubernetes CronJob and a systemd service + timer. For production operation of the event listener (sizing, cursor persistence, alerts and recovery), see the [horizon-listener runbook](./docs/runbooks/horizon-listener.md).
 
 ### Building
 

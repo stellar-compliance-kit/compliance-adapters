@@ -6,6 +6,7 @@
 import { HorizonListener, type HorizonListenerOptions } from './listener';
 import { RpcEventSource, type RpcEventSourceOptions } from './eventSource';
 import { HttpWebhookSender, type HttpWebhookSenderOptions } from './webhook';
+import type { EventForwarder } from './forwarder';
 
 export interface WebhookForwarderOptions {
   eventSource: RpcEventSourceOptions;
@@ -16,14 +17,28 @@ export interface WebhookForwarderOptions {
 export function createWebhookForwarder(
   options: WebhookForwarderOptions,
 ): HorizonListener {
-  const eventSource = new RpcEventSource(options.eventSource);
-  const webhook = new HttpWebhookSender(options.webhook);
+  return createForwarder({
+    eventSource: options.eventSource,
+    forwarder: new HttpWebhookSender(options.webhook),
+    listenerOptions: options.listenerOptions,
+  });
+}
 
+export interface ForwarderOptions {
+  eventSource: RpcEventSourceOptions;
+  /** Any event sink: HttpWebhookSender, KafkaForwarder, or a custom implementation. */
+  forwarder: EventForwarder;
+  listenerOptions?: Omit<HorizonListenerOptions, 'eventSource' | 'onEvent'>;
+}
+
+/** Wires an RPC event source to any pluggable {@link EventForwarder}. */
+export function createForwarder(options: ForwarderOptions): HorizonListener {
+  const eventSource = new RpcEventSource(options.eventSource);
   return new HorizonListener({
     ...options.listenerOptions,
     eventSource,
     onEvent: async (event) => {
-      await webhook.send(event);
+      await options.forwarder.send(event);
     },
   });
 }

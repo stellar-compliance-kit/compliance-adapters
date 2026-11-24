@@ -12,6 +12,8 @@
  * Commands:
  *   sync-sanctions   Push flagged addresses into a deployed denylist-gate contract
  *   listen           Poll Soroban RPC for contract events and forward to a webhook
+ *   tail             Stream decoded contract events as JSON to stdout (#1006)
+ *   horizon-listener Alias for the horizon-listener subcommands (e.g. `tail`)
  *   dlq              Inspect and replay the dead-letter queue
  *
  * Run `compliance-adapters <command> --help` for command-specific flags.
@@ -20,6 +22,8 @@
 const COMMANDS = {
   'sync-sanctions': runSyncSanctions,
   listen: runListen,
+  tail: runTail,
+  'horizon-listener': runHorizonListenerAlias,
   dlq: runDlq,
 };
 
@@ -57,6 +61,8 @@ compliance-adapters <command> [options]
 Commands:
   sync-sanctions   Push flagged addresses into a deployed denylist-gate contract
   listen           Poll Soroban RPC for contract events and forward to a webhook
+  tail             Tail decoded contract events as JSON (try: tail --help)
+  horizon-listener Alias for horizon-listener commands (e.g. horizon-listener tail)
   dlq              Inspect and replay the dead-letter queue (try: dlq replay --help)
 
 Options:
@@ -285,6 +291,137 @@ Examples:
 
   await listener.start();
   console.info('[listen] Listener stopped.');
+}
+
+// ---------------------------------------------------------------------------
+// tail command (#1006): follow decoded events for a contract
+// ---------------------------------------------------------------------------
+
+/**
+ * Flags:
+ *   --contract <id>             Contract ID to tail (required, repeatable)
+ *   --from <ledger>             Ledger to start from (required for a fresh stream)
+ *   --rpc-url <url>             Soroban RPC endpoint (default: testnet)
+ *   --network-passphrase <str>  Stellar network passphrase (default: testnet)
+ *   --poll-interval-ms <n>      Milliseconds between empty polls (default: 1000)
+ *   --limit <n>                 Stop after N events (default: unlimited)
+ *   --help                      Show this help message
+ *
+ * Also available as `compliance-adapters horizon-listener tail`.
+ */
+async function runTail(argv) {
+  if (argv.includes('--help') || argv.includes('-h')) {
+    console.log(`
+compliance-adapters tail [options]
+
+Follow decoded contract events from Soroban RPC, printing one decoded JSON
+object per line to stdout. Alias: horizon-listener tail [options].
+
+Options:
+  --contract <id>             Contract ID to tail (required; repeat for multiple)
+  --from <ledger>             Starting ledger for a fresh stream (required unless a cursor is stored)
+  --rpc-url <url>             Soroban RPC endpoint (default: https://soroban-testnet.stellar.org)
+  --network-passphrase <str>  Stellar network passphrase (default: testnet)
+  --poll-interval-ms <n>      Milliseconds to wait after an empty poll (default: 1000)
+  --limit <n>                 Stop after N events (default: unlimited)
+  --help                      Show this help message
+
+Example:
+  compliance-adapters tail \\
+    --contract CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABH4M \\
+    --from 1000000 --rpc-url https://soroban-testnet.stellar.org
+`.trim());
+    return;
+  }
+
+  const { Networks } = require('@stellar/stellar-sdk');
+
+  const contractIds = [
+    ...collectRepeatedFlag(argv, '--contract'),
+    ...collectRepeatedFlag(argv, '--contract-id'),
+  ];
+  const args = parseFlags(argv);
+  const from = args['from'] ?? args['start-ledger'];
+
+  if (contractIds.length === 0) {
+    console.error('Missing required flag: --contract <id>');
+    process.exitCode = 1;
+    return;
+  }
+  if (from === undefined || from === true) {
+    console.error('Missing required flag: --from <ledger>');
+    process.exitCode = 1;
+    return;
+  }
+  const startLedger = Number(from);
+  if (!Number.isInteger(startLedger) || startLedger < 0) {
+    console.error('Invalid flag: --from must be a non-negative integer ledger');
+    process.exitCode = 1;
+    return;
+  }
+  const limit = args['limit'] !== undefined ? Number(args['limit']) : Infinity;
+  if (!Number.isInteger(limit) || limit < 1) {
+    console.error('Invalid flag: --limit must be a positive integer');
+    process.exitCode = 1;
+    return;
+  }
+
+  // Load after flag validation so `--help`/validation errors work before build.
+  const { RpcEventSource } = require('../horizon-listener/dist/index.js');
+
+  const source = new RpcEventSource({
+    rpcUrl: args['rpc-url'] ?? 'https://soroban-testnet.stellar.org',
+    networkPassphrase: args['network-passphrase'] ?? Networks.TESTNET,
+    contractIds,
+    startLedger,
+    decode: 'native',
+  });
+
+  const pollIntervalMs = args['poll-interval-ms'] ? Number(args['poll-interval-ms']) : 1000;
+  let stopped = false;
+  let cursor;
+  let printed = 0;
+  const stop = () => {
+    stopped = true;
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+
+  while (!stopped && printed < limit) {
+    try {
+      const page = await source.getEvents(cursor);
+      cursor = page.nextCursor || cursor;
+      for (const event of page.events) {
+        // One self-contained decoded JSON document per event, safe to pipe to jq.
+        console.log(JSON.stringify(event));
+        if (++printed >= limit) break;
+      }
+    } catch (err) {
+      console.error(`[tail] poll failed: ${err instanceof Error ? err.message : String(err)}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!stopped && printed < limit) {
+      await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+    }
+  }
+  process.removeListener('SIGINT', stop);
+  process.removeListener('SIGTERM', stop);
+}
+
+/** `horizon-listener tail ...` is an alias for the top-level tail command. */
+async function runHorizonListenerAlias(argv) {
+  const [subcommand, ...rest] = argv;
+  if (subcommand === 'tail' || rest.includes('--help') || rest.includes('-h')) {
+    return runTail(rest);
+  }
+  console.error(`Unknown horizon-listener subcommand: "${subcommand}" (expected "tail")`);
+  console.log(`
+compliance-adapters horizon-listener tail [options]
+
+Tail decoded events for a contract. Run \`compliance-adapters tail --help\` for flags.
+`.trim());
+  process.exitCode = 1;
 }
 
 // ---------------------------------------------------------------------------

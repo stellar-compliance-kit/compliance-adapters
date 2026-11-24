@@ -17,6 +17,10 @@ import { verifyChallenge, AccountLoader } from './verify';
 import { issueJwt } from './jwt';
 import { rateLimiter, RateLimiterOptions } from './rate-limiter';
 import { makeErrorBody } from './errors';
+import {
+  createCachedClientSigningKeyResolver,
+  type ClientDomainCacheOptions,
+} from './clientDomainCache';
 
 export interface Sep10RouterOptions {
   /** Server keypair used to sign challenge transactions. Must be able to sign. */
@@ -56,6 +60,11 @@ export interface Sep10RouterOptions {
    * Without it, `GET /auth` rejects requests carrying a `client_domain`.
    */
   resolveClientSigningKey?: (clientDomain: string) => string | Promise<string>;
+  /**
+   * TTL cache settings applied to `resolveClientSigningKey` lookups (#993).
+   * @default 5 minute TTL, 100 entries, no metrics.
+   */
+  clientDomainCache?: ClientDomainCacheOptions;
   /** Maximum accepted length of the posted transaction. @default 8192 */
   maxTransactionLength?: number;
   /**
@@ -121,6 +130,11 @@ export function createSep10Router(options: Sep10RouterOptions): Router {
 
   const networkPassphrase = options.networkPassphrase ?? Networks.TESTNET;
   const maxTransactionLength = options.maxTransactionLength ?? DEFAULT_MAX_TRANSACTION_LENGTH;
+  // Cache the configured resolver so repeated challenges for the same wallet
+  // do not refetch its stellar.toml on every GET /auth (#993).
+  const resolveClientSigningKey = options.resolveClientSigningKey
+    ? createCachedClientSigningKeyResolver(options.resolveClientSigningKey, options.clientDomainCache)
+    : undefined;
   const issueToken =
     options.issueToken ??
     ((account, context) =>
@@ -162,13 +176,13 @@ export function createSep10Router(options: Sep10RouterOptions): Router {
       const clientDomain = firstString(req.query.client_domain);
       let clientSigningKey: string | undefined;
       if (clientDomain) {
-        if (!options.resolveClientSigningKey) {
+        if (!resolveClientSigningKey) {
           res.status(400).json(makeErrorBody('"client_domain" is not supported', 'client_domain_unsupported'));
           return;
         }
         try {
           assertBareDomain('client_domain', clientDomain);
-          clientSigningKey = await options.resolveClientSigningKey(clientDomain);
+          clientSigningKey = await resolveClientSigningKey(clientDomain);
         } catch (error) {
           logger.warn('sep10-auth: could not resolve client_domain signing key', {
             clientDomain,

@@ -90,6 +90,26 @@ listener.start().catch((err) => {
 `eventSource` and `onEvent` (e.g. `mode`, `maxRetries`, `logger`,
 `onEventFailure`, `metrics`, `tracer`).
 
+## Tailing decoded events from the CLI
+
+For debugging, use the CLI to follow decoded events for one or more contracts.
+Each event is printed to stdout as a single line of JSON (bigint values as
+decimal strings, bytes as hex, maps as objects), so it can be piped to `jq`:
+
+```sh
+compliance-adapters tail \
+  --contract CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABH4M \
+  --from 1000000 \
+  --rpc-url https://soroban-testnet.stellar.org
+```
+
+`horizon-listener tail ...` is an alias for the same command. Flags:
+`--contract` (repeatable, required), `--from` (starting ledger, required),
+`--rpc-url`, `--network-passphrase`, `--poll-interval-ms` (default `1000`) and
+`--limit` (stop after N events). The source is `RpcEventSource` with
+`decode: 'native'`; cursor values are reused between polls. Press Ctrl+C to
+stop; the command also exits cleanly on SIGTERM.
+
 ## Manual wiring
 
 If you need more control (a custom `EventSource`, extra processing in
@@ -140,6 +160,33 @@ app.post('/webhook', (req, res) => {
 });
 app.listen(4000);
 ```
+
+## Forwarding to Kafka / a message bus
+
+`EventForwarder` is the pluggable sink interface (`send(event)`, optional
+`stop()`); `HttpWebhookSender` already implements it. `KafkaForwarder`
+publishes the same decoded JSON envelope to a Kafka topic, keyed by the stable
+event id so consumers can deduplicate. It takes any kafkajs-compatible
+producer — `horizon-listener` has no new runtime dependency:
+
+```ts
+import { Kafka } from 'kafkajs';
+import { createForwarder, KafkaForwarder } from 'horizon-listener';
+
+const producer = new Kafka({ brokers: ['localhost:9092'] }).producer();
+await producer.connect();
+
+const listener = createForwarder({
+  eventSource: { rpcUrl, networkPassphrase, contractIds, startLedger, decode: 'native' },
+  forwarder: new KafkaForwarder({ topic: 'stellar.contract-events', producer }),
+});
+await listener.start();
+```
+
+Custom buses only need to implement `EventForwarder` and be passed to
+`createForwarder`. Call `await forwarder.stop()` on shutdown to disconnect the
+producer. See [`examples/kafka-forwarder.ts`](examples/kafka-forwarder.ts) for a
+complete example.
 
 ## Decoding events to native JS (`decode`)
 
@@ -495,6 +542,7 @@ operator environment.
 
 ## Links
 
+- [Production operations runbook](../docs/runbooks/horizon-listener.md)
 - [Root README](../README.md)
 - [`compliance-primitives`](https://github.com/stellar-compliance-kit/compliance-primitives) —
   the on-chain `denylist-gate` and `allowlist-token` Soroban contracts this

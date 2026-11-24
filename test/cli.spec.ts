@@ -122,6 +122,43 @@ describe('compliance-adapters CLI wrapper (bin/compliance-adapters.js)', () => {
       // Still shows usage so the user can recover.
       expect(stdout + stderr).toContain('compliance-adapters <command> [options]');
     });
+
+    it('advertises the tail command (#1006)', () => {
+      expect(run(['--help'])).toContain('tail');
+    });
+  });
+
+  describe('tail command dispatch (#1006)', () => {
+    it('prints command-level help with --help', () => {
+      const output = run(['tail', '--help']);
+      expect(output).toContain('compliance-adapters tail [options]');
+      for (const flag of ['--contract', '--from', '--rpc-url', '--poll-interval-ms', '--limit']) {
+        expect(output).toContain(flag);
+      }
+    });
+
+    it('supports the horizon-listener tail alias', () => {
+      expect(run(['horizon-listener', 'tail', '--help'])).toContain('compliance-adapters tail [options]');
+      const { stderr, code } = runWithError(['horizon-listener', 'bogus']);
+      expect(code).toBe(1);
+      expect(stderr).toContain('Unknown horizon-listener subcommand');
+    });
+
+    it('requires --contract and --from', () => {
+      const missingContract = runWithError(['tail', '--from', '100']);
+      expect(missingContract.code).toBe(1);
+      expect(missingContract.stderr).toContain('Missing required flag: --contract');
+
+      const missingFrom = runWithError(['tail', '--contract', 'CABC']);
+      expect(missingFrom.code).toBe(1);
+      expect(missingFrom.stderr).toContain('Missing required flag: --from');
+    });
+
+    it('rejects an invalid --from ledger', () => {
+      const { stderr, code } = runWithError(['tail', '--contract', 'CABC', '--from', 'not-a-ledger']);
+      expect(code).toBe(1);
+      expect(stderr).toContain('--from must be a non-negative integer ledger');
+    });
   });
 
   describe('sync-sanctions command dispatch', () => {

@@ -359,9 +359,40 @@ app.use(
 | `jwtExpiresInSeconds` | `86400` | Lifetime of issued tokens. |
 | `jwtIssuer` | `https://<first home domain>` | The JWT `iss` claim. |
 | `issueToken` | — | Replaces the built-in JWT issuer: `(account, { clientDomain, transaction }) => string \| Promise<string>`. |
-| `resolveClientSigningKey` | — | Resolves a `client_domain`'s `SIGNING_KEY`. Without it, requests with `client_domain` get `400`. |
+| `resolveClientSigningKey` | — | Resolves a `client_domain`'s `SIGNING_KEY`. Without it, requests with `client_domain` get `400`. Results are cached automatically (see below). |
+| `clientDomainCache` | — | TTL/size-limit settings for the resolver cache: `{ ttlMs, maxSize, metrics }`. |
 | `maxTransactionLength` | `8192` | Maximum accepted length of the posted transaction. |
 | `logger` | `noopLogger` | Injectable logger. |
+
+### Caching `client_domain` stellar.toml lookups
+
+`createSep10Router` wraps `resolveClientSigningKey` in a bounded TTL cache by
+default (5-minute TTL, 100 entries, least-recently-used eviction), so repeated
+challenges from the same wallet do not refetch its `stellar.toml` every time:
+
+```ts
+import {
+  createSep10Router,
+  createClientDomainTomlResolver,
+} from 'sep10-auth';
+
+app.use(createSep10Router({
+  serverKeypair,
+  homeDomain: 'example.com',
+  jwtSecret: process.env.SEP10_JWT_SECRET!,
+  resolveClientSigningKey: createClientDomainTomlResolver(),
+  clientDomainCache: {
+    ttlMs: 60_000,
+    maxSize: 500,
+    metrics: { increment: (outcome) => counter.inc(outcome) }, // 'hit' | 'miss'
+  },
+}));
+```
+
+For direct use outside the router,
+`createCachedClientSigningKeyResolver(resolve, options)` returns the cached
+resolver plus `getStats()` (`hits`, `misses`, `size`) and `clear()`. Failed
+lookups are never cached.
 
 ### `rateLimiter(options?)`
 
