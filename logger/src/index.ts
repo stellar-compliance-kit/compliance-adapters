@@ -202,6 +202,57 @@ function argsToRecord(args: unknown[]): { msg: string; context: Record<string, u
   return { msg: String(first), context: rest.length > 0 ? { data: rest } : {} };
 }
 
+// ── Sampling ──────────────────────────────────────────────────────────────────
+
+export interface SamplingLoggerOptions {
+  /** Probability that a debug call is emitted, in [0, 1]. Defaults to 1. */
+  debugSampleRate?: number;
+  /** Alias for `debugSampleRate`. */
+  sampleRate?: number;
+}
+
+function resolveDebugSampleRate(
+  rateOrOptions: number | SamplingLoggerOptions,
+): number {
+  const rate =
+    typeof rateOrOptions === 'number'
+      ? rateOrOptions
+      : (rateOrOptions.debugSampleRate ?? rateOrOptions.sampleRate ?? 1);
+  if (!Number.isFinite(rate) || rate < 0 || rate > 1) {
+    throw new Error(`logger: debug sample rate must be in [0, 1], got ${rate}`);
+  }
+  return rate;
+}
+
+/**
+ * Wrap a logger so that high-volume `debug` calls are sampled independently
+ * per logger. Info, warn, and error calls are always forwarded.
+ *
+ * @example
+ * ```ts
+ * const logger = createSampledLogger(consoleLogger, 0.05); // keep 5% of debug logs
+ * ```
+ */
+export function createSampledLogger(
+  base: Logger,
+  rateOrOptions: number | SamplingLoggerOptions,
+): Logger {
+  const rate = resolveDebugSampleRate(rateOrOptions);
+  const shouldEmit = (level: LogLevel): boolean =>
+    level !== 'debug' || rate >= 1 || (rate > 0 && Math.random() < rate);
+  const emit = (level: LogLevel, args: unknown[]) => {
+    if (shouldEmit(level)) base[level](...args);
+  };
+  return {
+    debug: (...args: unknown[]) => emit('debug', args),
+    info: (...args: unknown[]) => emit('info', args),
+    warn: (...args: unknown[]) => emit('warn', args),
+    error: (...args: unknown[]) => emit('error', args),
+    child: (bindings: Record<string, unknown>) =>
+      createSampledLogger(getChildLogger(base, bindings), rateOrOptions),
+  };
+}
+
 // ── Redaction ─────────────────────────────────────────────────────────────────
 
 /** Value substituted for redacted fields. */
@@ -335,13 +386,27 @@ export function createRedactingLogger(
  * (level name), `msg` (message string) plus any merged `context` fields.
  * Errors serialize to `{ msg, stack, type }`.
  */
-export function jsonLogger(options: { level?: LogLevel; stream?: JsonLogStream } = {}): Logger {
+export function jsonLogger(
+  options: {
+    level?: LogLevel;
+    stream?: JsonLogStream;
+    debugSampleRate?: number;
+    sampleRate?: number;
+  } = {},
+): Logger {
   const minLevel = options.level ?? 'debug';
   const minRank = LOG_LEVEL_RANK[minLevel];
+  const sampleRate = resolveDebugSampleRate({
+    debugSampleRate: options.debugSampleRate,
+    sampleRate: options.sampleRate,
+  });
   const stream: JsonLogStream =
     options.stream ?? ({ write: (s: string) => process.stdout.write(s) } as JsonLogStream);
   const emit = (level: LogLevel, args: unknown[]): void => {
     if (LOG_LEVEL_RANK[level] < minRank) return;
+    if (level === 'debug' && !(sampleRate >= 1 || (sampleRate > 0 && Math.random() < sampleRate))) {
+      return;
+    }
     const { msg, context } = argsToRecord(args);
     stream.write(JSON.stringify({ time: Date.now(), level, msg, ...context }) + '\n');
   };
