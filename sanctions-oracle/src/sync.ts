@@ -14,7 +14,7 @@ import {
   nativeToScVal,
   rpc,
 } from '@stellar/stellar-sdk';
-import { isValidStellarAddress, normalizeStellarAddress } from '@compliance-adapters/shared';
+import { isValidScreeningAddress, normalizeStellarAddress } from '@compliance-adapters/shared';
 import { type Logger, noopLogger, consoleLogger } from '@compliance-adapters/logger';
 export type { Logger } from '@compliance-adapters/logger';
 import { SanctionsProvider, CheckResult } from './SanctionsProvider';
@@ -393,8 +393,8 @@ export interface SyncResult {
    */
   failedWithReasons: FailedAddress[];
   /**
-   * Input entries that are not valid Stellar Ed25519 public keys (StrKey
-   * `G...`). These are never checked against the provider — a malformed entry
+   * Input entries that are not valid screening addresses (StrKey `G...`
+   * account or `C...` Soroban contract). These are never checked against the provider — a malformed entry
    * (typo, truncated paste, a non-Stellar identifier) is reported here rather
    * than silently landing in neither `flagged` nor `failed`.
    */
@@ -537,7 +537,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   const seenInvalid = new Set<string>();
   addresses.forEach((raw, i) => {
     const address = normalizedInput[i];
-    if (isValidStellarAddress(address)) {
+    if (isValidScreeningAddress(address)) {
       if (!seenValid.has(address)) {
         seenValid.add(address);
         validAddresses.push(address);
@@ -553,7 +553,7 @@ export async function syncSanctionsToDenylist(options: SyncOptions): Promise<Syn
   if (reconcile) {
     // Denylist entries must be re-checked to learn whether they were cleared.
     for (const entry of currentDenylistSet) {
-      if (isValidStellarAddress(entry) && !seenValid.has(entry)) {
+      if (isValidScreeningAddress(entry) && !seenValid.has(entry)) {
         seenValid.add(entry);
         validAddresses.push(entry);
       }

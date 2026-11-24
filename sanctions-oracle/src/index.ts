@@ -69,4 +69,8 @@ export {
 export { RateLimitedSanctionsProvider, RateLimitOptions } from './rateLimitedProvider';
 export { RestSanctionsProvider } from './restProvider';
 export type { RestSanctionsProviderOptions } from './restProvider';
+export {
+  isValidContractAddress,
+  isValidScreeningAddress,
+} from '@compliance-adapters/shared';
 export type { Logger } from '@compliance-adapters/logger';

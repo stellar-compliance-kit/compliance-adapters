@@ -12,8 +12,7 @@
  * ========================================================================= */
 
 import { SanctionsProvider } from './SanctionsProvider';
-import { StrKey } from '@stellar/stellar-sdk';
-import { normalizeStellarAddress } from '@compliance-adapters/shared';
+import { isValidScreeningAddress, normalizeStellarAddress } from '@compliance-adapters/shared';
 import { type Logger, consoleLogger } from '@compliance-adapters/logger';
 import * as fs from 'fs';
 
@@ -106,9 +105,9 @@ export class CsvSanctionsProvider implements SanctionsProvider {
         if (fields.length === 1 && fields[0].trim() === '') continue;
 
         const address = normalizeStellarAddress(fields[0]);
-        if (!StrKey.isValidEd25519PublicKey(address)) {
+        if (!isValidScreeningAddress(address)) {
           this.logger.warn(
-            `sanctions-oracle: skipping invalid address at line ${i + 1} of ${this.csvPath}: "${address}" is not a valid Stellar G... address`,
+            `sanctions-oracle: skipping invalid address at line ${i + 1} of ${this.csvPath}: "${address}" is not a valid Stellar G... or C... address`,
           );
           continue;
         }

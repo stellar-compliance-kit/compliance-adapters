@@ -10,7 +10,12 @@
  */
 
 import { Keypair } from '@stellar/stellar-sdk';
-import { isValidStellarAddress, normalizeStellarAddress } from '../src/index';
+import {
+  isValidStellarAddress,
+  isValidContractAddress,
+  isValidScreeningAddress,
+  normalizeStellarAddress,
+} from '../src/index';
 
 describe('isValidStellarAddress', () => {
   it('returns true for a valid Ed25519 public key (G... prefix)', () => {
@@ -36,6 +41,34 @@ describe('isValidStellarAddress', () => {
 
   it('returns false for a random non-Stellar string', () => {
     expect(isValidStellarAddress('not-a-stellar-address')).toBe(false);
+  });
+});
+
+describe('contract and screening address validation', () => {
+  const CONTRACT = 'CAAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQCAIBAEAQC526';
+
+  it('accepts a valid C... contract address', () => {
+    expect(isValidContractAddress(CONTRACT)).toBe(true);
+    expect(isValidScreeningAddress(CONTRACT)).toBe(true);
+    expect(isValidStellarAddress(CONTRACT)).toBe(false);
+  });
+
+  it('accepts G... account addresses for screening', () => {
+    const account = Keypair.random().publicKey();
+    expect(isValidScreeningAddress(account)).toBe(true);
+  });
+
+  it('rejects invalid C... addresses and muxed accounts', () => {
+    expect(isValidScreeningAddress('CBADEXAMPLE')).toBe(false);
+    expect(
+      isValidScreeningAddress('MAAZI4T7S6XNVW5RQFYNLJNHVBRFXRWUN5Q3NXPKV2HCEHZ3Y7WV2QHJR'),
+    ).toBe(false);
+  });
+
+  it('normalizes a padded lowercase contract address to a valid screening address', () => {
+    expect(isValidScreeningAddress(normalizeStellarAddress(` ${CONTRACT.toLowerCase()} `))).toBe(
+      true,
+    );
   });
 });
 

@@ -53,12 +53,14 @@ specific failure types programmatically without parsing log output.
 
 ### Input validation
 
-Every input address is checked with `StrKey.isValidEd25519PublicKey()`
-**before** it reaches the provider. Entries that are not well-formed Stellar
-`G...` public keys (a typo, a truncated paste, a non-Stellar identifier) are
-never checked or written — they are reported in `SyncResult.invalid`, kept
-distinct from `SyncResult.failed` (which means "the provider couldn't
-determine an answer").
+Every input address is checked with `isValidScreeningAddress()` (exported by
+`@compliance-adapters/shared`) **before** it reaches the provider. Valid
+Ed25519 account addresses (`G...`) and Soroban contract addresses (`C...`) are
+both accepted, since sanctioned entities may control contracts. Entries that
+are not well-formed screening addresses (a typo, a truncated paste, a
+non-Stellar identifier) are never checked or written — they are reported in
+`SyncResult.invalid`, kept distinct from `SyncResult.failed` (which means "the
+provider couldn't determine an answer").
 
 ### Address normalization
 
@@ -69,8 +71,8 @@ input and `currentDenylist`, `CsvSanctionsProvider`, `MockSanctionsProvider`,
 (trim, then uppercase, exported by `@compliance-adapters/shared`) before the
 provider lookup, the cache key and the denylist write. Padded or mixed-case
 spellings of one account are checked, cached and written once, under the
-canonical address. Input that is still not a valid `G...` key after
-normalization is reported verbatim in `SyncResult.invalid`.
+canonical address. Input that is still not a valid `G...` or `C...` address
+after normalization is reported verbatim in `SyncResult.invalid`.
 
 ### Delisting with `reconcile`
 
