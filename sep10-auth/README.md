@@ -333,6 +333,12 @@ An Express `Router` implementing the SEP-10 endpoints, guarded by the built-in
 Failures respond `{ "error": "<message>" }` with `400` (invalid request or
 challenge) or `429` (rate limited).
 
+A machine-readable [OpenAPI 3.1](./openapi.yaml) description of these routes
+(challenge, token exchange and revocation) lives in
+[`openapi.yaml`](./openapi.yaml). It is validated in CI with
+`npm run lint:openapi` (Redocly CLI); run the same command locally after
+changing the router's request or response shapes.
+
 ```ts
 import express from 'express';
 import { createSep10Router } from 'sep10-auth';
@@ -622,6 +628,46 @@ If the challenge is unsigned, expired, or invalid:
 
 See [`examples/express-app`](./examples/express-app) for a small runnable
 Express app wiring together the full challenge/verify roundtrip.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Client
+    W[Wallet / CLI]
+  end
+
+  subgraph "sep10-auth"
+    R[createSep10Router<br/>GET/POST /auth]
+    M[createSep10Middleware<br/>/ sep10Plugin]
+    V[verifyChallenge]
+    G[generateChallenge]
+    RS[(RevocationStore)]
+    RL[rateLimiter]
+  end
+
+  subgraph "On-chain primitives"
+    AT[allowlist-token]
+    DG[denylist-gate]
+    JF[jurisdiction-flag]
+  end
+
+  W -- "GET /auth?account=..." --> RL --> R
+  R --> G
+  W -- "POST /auth (signed XDR)" --> R
+  R --> V
+  V --> RS
+  R -- "JWT" --> W
+  W -- "Bearer token" --> M
+  M --> V
+  M -- "req.stellarAddress" --> AT
+  M -- "req.stellarAddress" --> DG
+  M -- "req.stellarAddress" --> JF
+```
+
+The router issues challenges and tokens; the middleware (or Fastify plugin)
+re-verifies the signed challenge on protected routes and hands the resolved
+address to the on-chain compliance primitives.
 
 ## Scope
 

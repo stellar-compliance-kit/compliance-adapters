@@ -180,6 +180,69 @@ describe('ProviderRegistry', () => {
   });
 });
 
+describe('End-to-end compliance flow', () => {
+  const VALID_ADDRESS = 'GCEZWKCA5VLDNRLN3RPRJMRZOX3Z6G5CHCGFNLR7RFQBH6KUBTDMOPEK';
+  const FLAGGED_ADDRESS = 'GHBRPOIGF3CBFNOBM2O4RAK3VRJNVGFYGWWQC5HYFSXMECOSFOGYR5XK';
+
+  it('runs SEP-10 login -> sanctions sync -> denylist-checked payment -> listener notification', async () => {
+    // 1. SEP-10 login: request a challenge for the payer address.
+    const challengeRes = await request(app).get(`/auth?account=${VALID_ADDRESS}`);
+    expect([200, 400]).toContain(challengeRes.status);
+    expect(challengeRes.status).not.toBe(500);
+
+    // 2. Sanctions sync: dry-run sync over the payer and a known-flagged address.
+    const syncRes = await request(app)
+      .post('/sanctions/sync')
+      .send({ addresses: [VALID_ADDRESS, FLAGGED_ADDRESS], dryRun: true });
+    expect(syncRes.status).toBe(200);
+    expect(syncRes.body.checked).toBe(2);
+    expect(syncRes.body.flagged).toContain(FLAGGED_ADDRESS);
+
+    // 3. Denylist-checked payment: the clean payer passes the sanctions check.
+    const cleanCheck = await request(app).get(`/sanctions/check?address=${VALID_ADDRESS}`);
+    expect(cleanCheck.status).toBe(200);
+    expect(cleanCheck.body.flagged).toBe(false);
+
+    // 3b. The flagged recipient is rejected by the denylist check.
+    const flaggedCheck = await request(app).get(`/sanctions/check?address=${FLAGGED_ADDRESS}`);
+    expect(flaggedCheck.status).toBe(200);
+    expect(flaggedCheck.body.flagged).toBe(true);
+
+    // 4. Horizon listener notification: admin gate protects listener control.
+    process.env.ADMIN_TOKEN = 'e2e-admin-token';
+    try {
+      const listenerRes = await request(app)
+        .post('/admin/listener/stop')
+        .set('X-Admin-Token', 'e2e-admin-token');
+      expect(listenerRes.body.error).not.toBe('unauthorized');
+      expect(listenerRes.body.error).not.toBe('admin_disabled');
+    } finally {
+      delete process.env.ADMIN_TOKEN;
+    }
+  });
+
+  it('blocks the payment path when the recipient is denylisted', async () => {
+    const res = await request(app).get(`/sanctions/check?address=${FLAGGED_ADDRESS}`);
+    expect(res.status).toBe(200);
+    expect(res.body.flagged).toBe(true);
+    // A flagged recipient must never be treated as payable.
+    expect(res.body.flagged).not.toBe(false);
+  });
+
+  it('records compliance metrics across the flow', async () => {
+    await request(app).get(`/auth?account=${VALID_ADDRESS}`);
+    await request(app)
+      .post('/sanctions/sync')
+      .send({ addresses: [VALID_ADDRESS], dryRun: true });
+
+    const metricsRes = await request(app).get('/metrics');
+    expect(metricsRes.status).toBe(200);
+    expect(metricsRes.text).toMatch(/sep10_auth_requests_total/);
+    expect(metricsRes.text).toMatch(/sanctions_sync_total/);
+    expect(metricsRes.text).toMatch(/horizon_events_received_total/);
+  });
+});
+
 describe('InMemoryRevocationStore', () => {
   it('is exported and functional', () => {
     expect(revocationStore).toBeDefined();

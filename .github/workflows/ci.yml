@@ -41,6 +41,10 @@ jobs:
       - name: Check Root Changelog
         run: npm run check:changelog
 
+      - name: Validate OpenAPI spec
+        # Ensures sep10-auth/openapi.yaml is a valid OpenAPI 3.1 document.
+        run: npm run lint:openapi
+
       - name: Typecheck
         run: npm run typecheck
 
@@ -231,6 +235,27 @@ jobs:
         env:
           # Pass contract ID if pre-deployed; otherwise tests will deploy fresh
           TEST_CONTRACT_ID: ${{ secrets.TEST_CONTRACT_ID }}
+
+  openapi-lint:
+    name: Validate OpenAPI spec (sep10-auth)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Use Node.js 20.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 20.x
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint OpenAPI 3.1 spec
+        # Validates sep10-auth/openapi.yaml (challenge, token and revocation
+        # routes) against the OpenAPI 3.1 specification (issue #1037).
+        run: npm run lint:openapi
 
   # No Rust/Soroban adapter contracts exist in this repo yet. If one is added
   # under a package with a Cargo.toml, add a matching `cargo test` job here.

@@ -42,6 +42,7 @@ const {
   syncSanctionsToDenylist,
   createRpcDenylistWriter,
 } = require('../../sanctions-oracle/dist/index.js');
+const { createRpcDenylistReader } = require('../../sanctions-oracle/dist/index.js');
 const {
   HorizonListener,
   RpcEventSource,
@@ -276,6 +277,45 @@ if (DENYLIST_CONTRACT_ID && process.env.SERVER_SECRET) {
   };
   console.info('[demo] No DENYLIST_CONTRACT_ID — denylist writer is in dry-run mode');
 }
+
+// DenylistReader — consults the on-chain denylist before allowing a payment.
+// Uses the real RPC reader when a contract is configured; otherwise falls back
+// to an in-memory set that mirrors what the dry-run writer recorded so the
+// end-to-end flow still works locally without a deployed contract.
+/** @type {Set<string>} */
+const dryRunDenylist = new Set();
+
+let denylistReader;
+if (DENYLIST_CONTRACT_ID) {
+  try {
+    denylistReader = createRpcDenylistReader({
+      rpcUrl: SOROBAN_RPC_URL,
+      networkPassphrase: NETWORK_PASSPHRASE,
+      contractId: DENYLIST_CONTRACT_ID,
+    });
+    console.info(`[demo] Live RPC denylist reader targeting contract: ${DENYLIST_CONTRACT_ID}`);
+  } catch (err) {
+    console.warn(`[demo] Could not create RPC denylist reader (${err.message}); using in-memory reader`);
+  }
+}
+
+if (!denylistReader) {
+  denylistReader = {
+    async isDenylisted(address) {
+      return dryRunDenylist.has(address);
+    },
+  };
+  console.info('[demo] No DENYLIST_CONTRACT_ID — denylist reader is in-memory (dry-run) mode');
+}
+
+// Keep the dry-run in-memory denylist in sync with what the writer records.
+const _baseDenylistWriter = denylistWriter;
+denylistWriter = {
+  async addToDenylist(address) {
+    dryRunDenylist.add(address);
+    return _baseDenylistWriter.addToDenylist(address);
+  },
+};
 
 // ---------------------------------------------------------------------------
 // Horizon listener setup (#286 metrics + #287 showcase)
@@ -541,6 +581,126 @@ app.get('/metrics', async (_req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// End-to-end compliance flow: SEP-10 login → sanctions sync → denylist-checked
+// payment (#1035)
+//
+// POST /payments/check
+//   body: { transaction, destination, amount? }
+//
+//   1. Verify the SEP-10 bearer token (the signed challenge XDR) — this is the
+//      same token returned by POST /auth.  Revoked tokens are rejected.
+//   2. Run a sanctions-oracle sync/check for the destination address via the
+//      ProviderRegistry (fan-out across all configured providers).
+//   3. Consult the on-chain denylist contract for the destination address.
+//   4. Only if all three checks pass is the payment "allowed".
+// ---------------------------------------------------------------------------
+
+const paymentsCheckedTotal = new promClient.Counter({
+  name: 'payments_checked_total',
+  help: 'Total payment compliance checks',
+  labelNames: ['result'], // 'allowed' | 'denied_sanctions' | 'denied_denylist' | 'unauthorized' | 'error'
+  registers: [registry],
+});
+
+app.post('/payments/check', async (req, res) => {
+  const { transaction, destination, amount } = req.body ?? {};
+
+  if (!transaction || typeof transaction !== 'string') {
+    return res.status(400).json({ error: 'missing transaction (SEP-10 bearer token) in request body' });
+  }
+  if (!destination || typeof destination !== 'string') {
+    return res.status(400).json({ error: 'missing destination in request body' });
+  }
+
+  // Rate-limit payment checks by IP
+  const ip = req.ip ?? 'unknown';
+  if (!rateLimiter(ip)) {
+    sep10AuthTotal.labels('rate_limited').inc();
+    return res.status(429).json({ error: 'too_many_requests', retryAfter: 60 });
+  }
+
+  // --- Step 1: verify the SEP-10 bearer token -----------------------------
+  if (revocationStore.isRevoked(transaction)) {
+    sep10AuthTotal.labels('revoked').inc();
+    paymentsCheckedTotal.labels('unauthorized').inc();
+    return res.status(401).json({ error: 'token_revoked' });
+  }
+
+  const authResult = verifyChallenge(transaction, {
+    serverAccountId: SERVER_KEYPAIR.publicKey(),
+    networkPassphrase: NETWORK_PASSPHRASE,
+    homeDomains: HOME_DOMAIN,
+    webAuthDomain: HOME_DOMAIN,
+  });
+
+  if (!authResult.valid) {
+    sep10AuthTotal.labels('failure').inc();
+    paymentsCheckedTotal.labels('unauthorized').inc();
+    return res.status(401).json({ error: 'unauthorized', reason: authResult.error });
+  }
+
+  sep10AuthTotal.labels('success').inc();
+  const sourceAddress = authResult.address;
+
+  try {
+    // --- Step 2: sanctions-oracle sync/check for the destination ----------
+    const syncStart = Date.now();
+    const syncResult = await syncSanctionsToDenylist({
+      provider: providerRegistry,
+      addresses: [destination],
+      writer: denylistWriter,
+      dryRun: !DENYLIST_CONTRACT_ID,
+    });
+    sanctionsSyncTotal.labels('success').inc();
+    sanctionsFlaggedAddresses.set(syncResult.flagged.length);
+    sanctionsSyncDurationMs.observe(Date.now() - syncStart);
+
+    const sanctionsFlagged =
+      syncResult.flagged.includes(destination) ||
+      (await providerRegistry.checkAddress(destination)).flagged;
+
+    if (sanctionsFlagged) {
+      paymentsCheckedTotal.labels('denied_sanctions').inc();
+      return res.status(403).json({
+        allowed: false,
+        reason: 'sanctions_flagged',
+        source: sourceAddress,
+        destination,
+      });
+    }
+
+    // --- Step 3: consult the on-chain denylist ----------------------------
+    const denylisted = await denylistReader.isDenylisted(destination);
+    if (denylisted) {
+      paymentsCheckedTotal.labels('denied_denylist').inc();
+      return res.status(403).json({
+        allowed: false,
+        reason: 'denylisted',
+        source: sourceAddress,
+        destination,
+      });
+    }
+
+    // --- Step 4: all checks passed ----------------------------------------
+    paymentsCheckedTotal.labels('allowed').inc();
+    return res.json({
+      allowed: true,
+      source: sourceAddress,
+      destination,
+      amount: amount ?? null,
+      checks: {
+        sep10: 'ok',
+        sanctions: 'ok',
+        denylist: 'ok',
+      },
+    });
+  } catch (err) {
+    paymentsCheckedTotal.labels('error').inc();
+    return res.status(500).json({ error: 'compliance_check_error', detail: err.message });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Start server
 // ---------------------------------------------------------------------------
 
@@ -554,10 +714,11 @@ if (require.main === module) {
     console.info('  POST /auth/revoke              — revoke a bearer token');
     console.info('  GET  /sanctions/check?address= — check an address via ProviderRegistry');
     console.info('  POST /sanctions/sync           — run a full sanctions sync');
+    console.info('  POST /payments/check           — end-to-end compliance-checked payment');
     console.info('  POST /admin/listener/start     — start Horizon event listener');
     console.info('  POST /admin/listener/stop      — stop Horizon event listener');
     console.info('  GET  /metrics                  — Prometheus metrics\n');
   });
 }
 
-module.exports = { app, revocationStore, providerRegistry, rateLimiter };
+module.exports = { app, revocationStore, providerRegistry, rateLimiter, denylistReader };

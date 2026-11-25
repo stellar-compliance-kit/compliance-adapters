@@ -29,6 +29,112 @@ import express, { Request, Response, NextFunction, RequestHandler } from 'expres
 import { createSep10Middleware, VerifyChallengeOptions } from 'sep10-auth';
 import { SanctionsProvider, MockSanctionsProvider } from 'sanctions-oracle';
 
+// ── Pre-submission payment screening ────────────────────────────────────────
+// Before a payment is built and signed, both the sender and the recipient must
+// clear two independent checks:
+//
+//   1. Sanctions screening — the address must not appear on a sanctions /
+//      watchlist as reported by the configured SanctionsProvider.
+//   2. On-chain denylist — the address must not be present in the denylist
+//      contract deployed on Stellar (queried via a minimal read-only client).
+//
+// Only when both addresses pass both checks is a transaction built.  Any
+// failure produces a structured rejection so callers can surface a precise
+// reason without ever submitting the payment.
+
+/** Minimal read-only view of the on-chain denylist contract. */
+export interface DenylistClient {
+  /** Resolve to true when `address` is present in the on-chain denylist. */
+  isDenylisted(address: string): Promise<boolean>;
+}
+
+/** Inputs required to screen and (optionally) build a payment. */
+export interface ScreenPaymentParams {
+  /** Stellar address of the payment sender. */
+  sender: string;
+  /** Stellar address of the payment recipient. */
+  recipient: string;
+  /** Amount to send, in stroops (or any caller-defined unit). */
+  amount: string;
+  /** Asset identifier, e.g. "native" or "USDC:GISSUER...". */
+  asset: string;
+}
+
+/** Structured outcome of pre-submission screening. */
+export type ScreenPaymentResult =
+  | {
+      allowed: true;
+      /** The transaction envelope, ready to be signed and submitted. */
+      transaction: {
+        sender: string;
+        recipient: string;
+        amount: string;
+        asset: string;
+      };
+    }
+  | {
+      allowed: false;
+      /** Machine-readable rejection code. */
+      code: 'SANCTIONS_FLAGGED' | 'DENYLISTED';
+      /** Which party triggered the rejection. */
+      party: 'sender' | 'recipient';
+      /** Human-readable explanation. */
+      reason: string;
+    };
+
+/**
+ * Screen a payment against the sanctions provider and the on-chain denylist.
+ *
+ * Both the sender and the recipient are checked.  The transaction is only
+ * built when every check passes; otherwise a structured rejection is returned
+ * and no transaction is produced.
+ */
+export async function screenPayment(
+  params: ScreenPaymentParams,
+  provider: SanctionsProvider,
+  denylist: DenylistClient,
+): Promise<ScreenPaymentResult> {
+  const parties: Array<{ party: 'sender' | 'recipient'; address: string }> = [
+    { party: 'sender', address: params.sender },
+    { party: 'recipient', address: params.recipient },
+  ];
+
+  for (const { party, address } of parties) {
+    // 1. Sanctions screening.
+    const sanctions = await provider.checkAddress(address);
+    if (sanctions.flagged) {
+      return {
+        allowed: false,
+        code: 'SANCTIONS_FLAGGED',
+        party,
+        reason: `${party} address is on a sanctions watchlist`,
+      };
+    }
+
+    // 2. On-chain denylist.
+    const denied = await denylist.isDenylisted(address);
+    if (denied) {
+      return {
+        allowed: false,
+        code: 'DENYLISTED',
+        party,
+        reason: `${party} address is on the on-chain denylist`,
+      };
+    }
+  }
+
+  // Both parties cleared both checks — build the transaction.
+  return {
+    allowed: true,
+    transaction: {
+      sender: params.sender,
+      recipient: params.recipient,
+      amount: params.amount,
+      asset: params.asset,
+    },
+  };
+}
+
 export interface GatedAppOptions {
   /** Options forwarded verbatim to createSep10Middleware / verifyChallenge. */
   sep10: VerifyChallengeOptions;
