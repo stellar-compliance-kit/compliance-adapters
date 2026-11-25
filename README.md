@@ -224,6 +224,15 @@ See each package's README for its full API and configuration options.
 
 See [CHANGELOG.md](./CHANGELOG.md) for release notes and version history.
 
+## Migration guides
+
+Every major (breaking) release gets a dedicated migration guide under
+[`docs/migrations/`](./docs/migrations/README.md), with one file per major version
+(e.g. `docs/migrations/v1.md`, `docs/migrations/v2.md`). Each guide explains what changed,
+who is affected, and the concrete steps to upgrade. Start at the
+[migration guides index](./docs/migrations/README.md) to find the guide for the version
+you're upgrading from.
+
 ## Contributing
 
 Contributions welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for setup and workflow details.

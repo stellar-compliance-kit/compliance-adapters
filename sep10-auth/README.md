@@ -623,6 +623,20 @@ If the challenge is unsigned, expired, or invalid:
 See [`examples/express-app`](./examples/express-app) for a small runnable
 Express app wiring together the full challenge/verify roundtrip.
 
+## Documentation
+
+- [`docs/deployment.md`](./docs/deployment.md) — production deployment guide:
+  secrets management and key rotation, Redis-backed rate limiting and
+  revocation storage, running behind reverse proxies/load balancers
+  (`trust proxy`, forwarded headers), and monitoring.
+- [`docs/troubleshooting.md`](./docs/troubleshooting.md) — maps each
+  `Sep10ErrorCode` and `VerifyErrorCode` to likely causes and fixes.
+
+For production deployments, back `revocationStore` with a shared datastore so
+revocations survive restarts and apply across instances. See
+[`examples/redisRevocationStore.ts`](./examples/redisRevocationStore.ts) for a
+copy-in Redis implementation of the `RevocationStore` interface.
+
 ## Scope
 
 This package only implements the SEP-10 building blocks (challenge

@@ -21,6 +21,23 @@ Describe the testing you've performed to validate these changes:
 - [ ] Manual testing performed
 - [ ] N/A (documentation or configuration only)
 
+## Security Review Checklist
+
+> **Required** for any PR that touches `sep10-auth` or signing code (webhook HMAC signing, JWT issuance, key handling). If this PR does not touch auth or signing code, mark this section N/A and move on.
+
+- [ ] N/A — this PR does not touch `sep10-auth` or signing code
+- [ ] Signing keys/secrets are never logged or committed (no secrets in code, logs, error messages, or test fixtures)
+- [ ] Token validation and expiry are enforced (signature, issuer, audience, and `exp`/`nbf`/`iat` checks as applicable)
+- [ ] Revocation store is consulted where applicable (revoked tokens/keys are rejected)
+- [ ] Constant-time comparison is used for signatures and HMACs (no `==`/`===` on secret material)
+- [ ] Input validation and size limits are applied to tokens and transactions
+- [ ] Rate limiting has been considered for the affected endpoints/paths
+- [ ] No new dependencies introduced without review (or reviewed and justified below)
+
+**Notes for reviewers (security-relevant context, threat model, or dependency justification):**
+
+> CODEOWNERS routes `sep10-auth` changes to the auth maintainer for review. Ensure the relevant reviewer has approved before merging.
+
 ## Checklist
 - [ ] Tests added or updated
 - [ ] Documentation updated

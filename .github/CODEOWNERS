@@ -9,11 +9,22 @@
 # SEP-10 Authentication adapter package
 /sep10-auth/ @akprinciple
 
+# SEP-10 Authentication adapter documentation
+/sep10-auth/docs/ @akprinciple @MooreTheAnalyst
+
 # Sanctions Oracle adapter package
 /sanctions-oracle/ @MooreTheAnalyst
 
 # Horizon Listener adapter package
 /horizon-listener/ @Lynndabel
+
+# Webhook HMAC signing code in horizon-listener requires auth maintainer review
+/horizon-listener/src/signing/ @akprinciple @Lynndabel
+/horizon-listener/src/webhook/ @akprinciple @Lynndabel
+
+# Shared signing and JWT utilities require auth maintainer review
+/signing/ @akprinciple
+/jwt/ @akprinciple
 
 # Shared logger package
 /logger/ @MooreTheAnalyst @akprinciple @Lynndabel
@@ -29,6 +40,9 @@
 
 # Shared tracing package
 /tracing/ @MooreTheAnalyst @akprinciple @Lynndabel
+
+# Migration documentation requires maintainer review
+/docs/migrations/ @MooreTheAnalyst @akprinciple @Lynndabel
 
 # GitHub configuration
 /.github/ @MooreTheAnalyst @akprinciple @Lynndabel
