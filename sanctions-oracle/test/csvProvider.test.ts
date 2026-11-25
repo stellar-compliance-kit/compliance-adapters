@@ -209,6 +209,79 @@ describe('CsvSanctionsProvider', () => {
     });
   });
 
+  describe('malformed input fixtures', () => {
+    const VALID_ADDRESS = 'GCSZ2L4YY3JHAT5ADE2DWP75QOWMKPHCWDO6FG7B6SSZOYNFXXMQHL66';
+
+    interface MalformedCase {
+      name: string;
+      csv: string;
+      expectedSource: string;
+    }
+
+    const cases: MalformedCase[] = [
+      {
+        name: 'strips a leading UTF-8 BOM so header and first address parse',
+        csv:
+          '\uFEFFaddress,source\n' + `${VALID_ADDRESS},bom-source\n`,
+        expectedSource: 'bom-source',
+      },
+      {
+        name: 'handles CRLF line endings',
+        csv: `address,source\r\n${VALID_ADDRESS},crlf-source\r\n`,
+        expectedSource: 'crlf-source',
+      },
+      {
+        name: 'parses quoted fields with embedded commas and escaped doubled quotes',
+        csv:
+          'address,source\n' +
+          `${VALID_ADDRESS},"OFAC, ""SDN"" List"\n`,
+        expectedSource: 'OFAC, "SDN" List',
+      },
+      {
+        name: 'ignores empty lines between rows',
+        csv:
+          'address,source\n' +
+          '\n' +
+          `${VALID_ADDRESS},blank-line-source\n` +
+          '\n',
+        expectedSource: 'blank-line-source',
+      },
+    ];
+
+    it.each(cases)('$name', async ({ csv, expectedSource }) => {
+      const csvPath = writeTempCsv(csv);
+      const provider = new CsvSanctionsProvider(csvPath);
+      const result = await provider.checkAddress(VALID_ADDRESS);
+      expect(result.flagged).toBe(true);
+      expect(result.source).toBe(expectedSource);
+    });
+
+    it('skips invalid addresses with a warning while valid rows still load', async () => {
+      const warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+      try {
+        const csvPath = writeTempCsv(
+          'address,source\n' +
+            'NOT-A-VALID-STELLAR-ADDRESS,bad-source\n' +
+            `${VALID_ADDRESS},good-source\n`,
+        );
+        const provider = new CsvSanctionsProvider(csvPath);
+
+        const invalidResult = await provider.checkAddress('NOT-A-VALID-STELLAR-ADDRESS');
+        expect(invalidResult.flagged).toBe(false);
+
+        const validResult = await provider.checkAddress(VALID_ADDRESS);
+        expect(validResult.flagged).toBe(true);
+        expect(validResult.source).toBe('good-source');
+
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('NOT-A-VALID-STELLAR-ADDRESS'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+  });
+
   describe('header-only file', () => {
     it('loads zero addresses and treats everything as unflagged', async () => {
       const csvPath = writeTempCsv('address,source\n');
