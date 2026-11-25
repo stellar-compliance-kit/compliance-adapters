@@ -30,6 +30,19 @@ export { SyncCheckpointStore, InMemoryCheckpointStore, FileCheckpointStore } fro
 export { createJsonlAuditLogger, JsonlAuditLoggerOptions } from './auditLog';
 export { withRetry, RetryOptions } from './retry';
 export {
+  ok,
+  err,
+  isOk,
+  isErr,
+  unwrap,
+  unwrapOr,
+  mapResult,
+  mapErr,
+  type Result,
+  type Ok,
+  type Err,
+} from './result';
+export {
   ProviderRegistry,
   ProviderRegistryAllProvidersFailedError,
   ConflictResolutionPolicy,

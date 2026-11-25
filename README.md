@@ -218,6 +218,20 @@ npx compliance-adapters sync-sanctions --dry-run --addresses ./sanctions-oracle/
 Run `npx compliance-adapters --help` for available commands and
 `npx compliance-adapters sync-sanctions --help` for command-specific options.
 
+### Local end-to-end stack with Docker Compose
+
+For a one-command local environment that runs Stellar quickstart, Redis, `sep10-auth`,
+`sanctions-oracle`, and `horizon-listener` together, use the provided `docker-compose.yml`:
+
+```bash
+docker compose up --build
+```
+
+This brings up a local Stellar network plus all three adapters wired together, so you can
+exercise the full flow without manual setup. See [`e2e-tests/README.md`](./e2e-tests/README.md)
+for prerequisites, service URLs, and instructions on running the end-to-end tests against the
+stack.
+
 See each package's README for its full API and configuration options.
 
 ## Changelog

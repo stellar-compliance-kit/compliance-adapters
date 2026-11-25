@@ -22,6 +22,99 @@ services:
     networks:
       - stellar-test
 
+  redis:
+    image: redis:7-alpine
+    command: ['redis-server', '--save', '', '--appendonly', 'no']
+    ports:
+      - '6379:6379'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+    networks:
+      - stellar-test
+
+  sep10-auth:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ['node', 'dist/sep10-auth/index.js']
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${SEP10_PORT:-3000}
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-local}
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-http://soroban-preview:8000/soroban/rpc}
+      STELLAR_HORIZON_URL: ${STELLAR_HORIZON_URL:-http://soroban-preview:8000}
+      STELLAR_NETWORK_PASSPHRASE: ${STELLAR_NETWORK_PASSPHRASE:-Standalone Network ; February 2017}
+      SEP10_HOME_DOMAIN: ${SEP10_HOME_DOMAIN:-localhost}
+      SEP10_WEB_AUTH_DOMAIN: ${SEP10_WEB_AUTH_DOMAIN:-localhost}
+      SEP10_SERVER_SIGNING_SECRET: ${SEP10_SERVER_SIGNING_SECRET:-}
+      SEP10_CHALLENGE_TTL_SECONDS: ${SEP10_CHALLENGE_TTL_SECONDS:-300}
+      SEP10_JWT_SECRET: ${SEP10_JWT_SECRET:-}
+      SEP10_JWT_TTL_SECONDS: ${SEP10_JWT_TTL_SECONDS:-3600}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    ports:
+      - '${SEP10_PORT:-3000}:${SEP10_PORT:-3000}'
+    depends_on:
+      soroban-preview:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - stellar-test
+
+  sanctions-oracle:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ['node', 'dist/sanctions-oracle/index.js']
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      PORT: ${ORACLE_PORT:-3001}
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-local}
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-http://soroban-preview:8000/soroban/rpc}
+      STELLAR_HORIZON_URL: ${STELLAR_HORIZON_URL:-http://soroban-preview:8000}
+      STELLAR_NETWORK_PASSPHRASE: ${STELLAR_NETWORK_PASSPHRASE:-Standalone Network ; February 2017}
+      DENYLIST_GATE_CONTRACT_ID: ${DENYLIST_GATE_CONTRACT_ID:-}
+      ORACLE_SIGNING_SECRET: ${ORACLE_SIGNING_SECRET:-}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    ports:
+      - '${ORACLE_PORT:-3001}:${ORACLE_PORT:-3001}'
+    depends_on:
+      soroban-preview:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - stellar-test
+
+  horizon-listener:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ['node', 'dist/horizon-listener/index.js']
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      STELLAR_NETWORK: ${STELLAR_NETWORK:-local}
+      STELLAR_RPC_URL: ${STELLAR_RPC_URL:-http://soroban-preview:8000/soroban/rpc}
+      STELLAR_HORIZON_URL: ${STELLAR_HORIZON_URL:-http://soroban-preview:8000}
+      STELLAR_NETWORK_PASSPHRASE: ${STELLAR_NETWORK_PASSPHRASE:-Standalone Network ; February 2017}
+      DENYLIST_GATE_CONTRACT_ID: ${DENYLIST_GATE_CONTRACT_ID:-}
+      WEBHOOK_URL: ${WEBHOOK_URL:-http://sep10-auth:3000/webhook}
+      POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-5000}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+    depends_on:
+      soroban-preview:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      sep10-auth:
+        condition: service_started
+    networks:
+      - stellar-test
+
 volumes:
   soroban-data:
 
