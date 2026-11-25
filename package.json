@@ -41,6 +41,7 @@
     "lint": "eslint sep10-auth/src sanctions-oracle/src horizon-listener/src tracing-types/src examples/full-stack-demo/server.js --ext .ts,.js",
     "check:license": "node scripts/check-license-headers.js",
     "check:changelog": "node scripts/check-root-changelog.js",
+    "openapi:validate": "redocly lint sep10-auth/openapi.yaml",
     "format": "prettier --check .",
     "format:check": "prettier --check .",
     "format:write": "prettier --write .",

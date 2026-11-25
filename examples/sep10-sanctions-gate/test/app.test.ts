@@ -20,6 +20,7 @@
 import request from 'supertest';
 import { MOCK_FLAGGED_ADDRESSES } from 'sanctions-oracle';
 import { createApp } from '../src/app';
+import { createPaymentScreeningService } from '../src/payment-screening';
 
 // ── Mock sep10-auth ───────────────────────────────────────────────────────────
 // Replace createSep10Middleware with a lightweight stub so tests don't need a
@@ -152,6 +153,87 @@ describe('GET /gated', () => {
         .set('Authorization', `Bearer valid-token-${flaggedAddress}`);
 
       expect(res.status).toBe(403);
+    }
+  });
+});
+
+// ── Payment screening service ─────────────────────────────────────────────────
+// Exercises the pre-submission screening flow: sanctions check + on-chain
+// denylist check, both backed by mocks so no network access is required.
+
+describe('payment screening before submission', () => {
+  // A denylisted address that is NOT in the sanctions mock list, so we can
+  // assert the denylist check independently of the sanctions provider.
+  const DENYLISTED_ADDRESS = 'GADENYLISTED0000000000000000000000000000000000000000';
+
+  // Mock denylist contract reader: only DENYLISTED_ADDRESS is flagged.
+  const mockDenylistReader = {
+    isDenylisted: jest.fn(async (address: string) => address === DENYLISTED_ADDRESS),
+  };
+
+  const service = createPaymentScreeningService({
+    // No sanctionsProvider → defaults to MockSanctionsProvider.
+    denylistReader: mockDenylistReader,
+  });
+
+  beforeEach(() => {
+    mockDenylistReader.isDenylisted.mockClear();
+  });
+
+  // ── Allowed: clean address passes both checks ─────────────────────────────
+  it('allows a payment when the address is neither sanctioned nor denylisted', async () => {
+    const result = await service.screen({ source: CLEAN_ADDRESS, destination: CLEAN_ADDRESS });
+
+    expect(result.allowed).toBe(true);
+    expect(result.reasons).toEqual([]);
+    expect(mockDenylistReader.isDenylisted).toHaveBeenCalledWith(CLEAN_ADDRESS);
+  });
+
+  // ── Blocked: sanctioned address ───────────────────────────────────────────
+  it('blocks a payment when the source address is sanctioned', async () => {
+    const result = await service.screen({ source: FLAGGED_ADDRESS, destination: CLEAN_ADDRESS });
+
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r: string) => /sanctions/i.test(r))).toBe(true);
+  });
+
+  it('blocks a payment when the destination address is sanctioned', async () => {
+    const result = await service.screen({ source: CLEAN_ADDRESS, destination: FLAGGED_ADDRESS });
+
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r: string) => /sanctions/i.test(r))).toBe(true);
+  });
+
+  // ── Blocked: denylisted address ───────────────────────────────────────────
+  it('blocks a payment when the source address is on the on-chain denylist', async () => {
+    const result = await service.screen({ source: DENYLISTED_ADDRESS, destination: CLEAN_ADDRESS });
+
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r: string) => /denylist/i.test(r))).toBe(true);
+  });
+
+  it('blocks a payment when the destination address is on the on-chain denylist', async () => {
+    const result = await service.screen({ source: CLEAN_ADDRESS, destination: DENYLISTED_ADDRESS });
+
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r: string) => /denylist/i.test(r))).toBe(true);
+  });
+
+  // ── Both checks fail: both reasons reported ───────────────────────────────
+  it('reports both reasons when source is sanctioned and destination is denylisted', async () => {
+    const result = await service.screen({ source: FLAGGED_ADDRESS, destination: DENYLISTED_ADDRESS });
+
+    expect(result.allowed).toBe(false);
+    expect(result.reasons.some((r: string) => /sanctions/i.test(r))).toBe(true);
+    expect(result.reasons.some((r: string) => /denylist/i.test(r))).toBe(true);
+  });
+
+  // ── Every known flagged address is blocked ────────────────────────────────
+  it('blocks payments for every address in MOCK_FLAGGED_ADDRESSES', async () => {
+    for (const flaggedAddress of Object.keys(MOCK_FLAGGED_ADDRESSES)) {
+      const result = await service.screen({ source: flaggedAddress, destination: CLEAN_ADDRESS });
+
+      expect(result.allowed).toBe(false);
     }
   });
 });

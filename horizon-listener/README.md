@@ -19,7 +19,47 @@ backed off before retrying, not a literal TCP reconnect. This package
 demonstrates the integration pattern app developers would build on top of;
 it is not itself a production event pipeline.
 
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Chain["Stellar / Soroban"]
+    DG["denylist-gate<br/>(contract)"]
+    AT["allowlist-token<br/>(contract)"]
+  end
+
+  subgraph Listener["horizon-listener"]
+    RPC["RpcEventSource<br/>(getEvents polling)"]
+    HL["HorizonListener<br/>(cursor, backoff,<br/>concurrency, metrics)"]
+    WH["HttpWebhookSender<br/>(HMAC signing,<br/>batching, retries)"]
+  end
+
+  subgraph Downstream["Downstream consumers"]
+    Hook["Webhook receiver"]
+  end
+
+  subgraph Siblings["Sibling packages"]
+    Oracle["oracle<br/>(price feeds)"]
+    Auth["auth<br/>(credential /<br/>session checks)"]
+  end
+
+  DG -- "contract events" --> RPC
+  AT -- "contract events" --> RPC
+  RPC --> HL
+  HL -- "onEvent" --> WH
+  WH -- "POST + X-Signature" --> Hook
+
+  Oracle -. "reads same contracts" .-> Chain
+  Auth -. "gates access to<br/>listener / webhook" .-> Listener
+```
+
+The listener is a read-only observer: it never writes to the contracts. The
+`oracle` package reads the same on-chain primitives for price data, and the
+`auth` package sits in front of the listener/webhook surface to decide who may
+consume the forwarded events.
+
 ## Runtime compatibility
+=======
 
 This package requires **Node.js 20 or newer** because its HTTP webhook sender
 uses the native `fetch` API provided by Node 20. Older Node.js versions do not

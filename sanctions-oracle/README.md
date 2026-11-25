@@ -16,6 +16,57 @@ by invoking its `add_to_denylist(address)` contract function.
 > section for the repo-wide version of this warning.
 > ---
 
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Off-chain["sanctions-oracle (off-chain)"]
+    direction TB
+    subgraph Providers["SanctionsProvider implementations"]
+      Mock["MockSanctionsProvider<br/>(dev/test only)"]
+      CSV["CsvSanctionsProvider"]
+      REST["RestSanctionsProvider"]
+      Reg["ProviderRegistry<br/>(multi-provider policies)"]
+      RL["RateLimitedSanctionsProvider"]
+      CB["CircuitBreakerSanctionsProvider"]
+    end
+    Sync["syncSanctionsToDenylist<br/>(retry, cache, concurrency,<br/>checkpoint, reconcile)"]
+    Writer["DenylistWriter<br/>(createRpcDenylistWriter)"]
+    Audit["AuditLogger<br/>(JSONL)"]
+    Metrics["MetricsRegistry / DefaultTracer"]
+  end
+
+  subgraph Shared["@compliance-adapters/shared"]
+    Norm["normalizeStellarAddress()"]
+  end
+
+  subgraph Auth["auth package"]
+    Signer["Signer<br/>(KeypairSigner / KMS / HSM)"]
+  end
+
+  subgraph Chain["On-chain (Soroban)"]
+    Gate["denylist-gate contract<br/>add_to_denylist(address)<br/>remove_from_denylist(address)"]
+  end
+
+  Providers -->|checkAddress| Sync
+  Sync -->|flagged addresses| Writer
+  Sync --> Norm
+  Sync --> Metrics
+  Writer --> Signer
+  Writer -->|invoke| Gate
+  Writer --> Audit
+  Reg -.->|wraps| Providers
+  RL -.->|wraps| Providers
+  CB -.->|wraps| Providers
+```
+
+The oracle is the off-chain half of the compliance stack: it screens
+addresses with one or more `SanctionsProvider` implementations, then
+`syncSanctionsToDenylist` drives a `DenylistWriter` (signed via the
+`auth` package's `Signer` abstraction) to call `add_to_denylist` /
+`remove_from_denylist` on the on-chain `denylist-gate` contract from
+[compliance-primitives](https://github.com/stellar-compliance-kit/compliance-primitives).
+
 ## What it does
 
 - Defines a generic `SanctionsProvider` interface so any external
