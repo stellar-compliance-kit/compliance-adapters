@@ -1,3 +1,4 @@
+import fc from 'fast-check';
 import { computeBackoffDelayMs } from '../src/index';
 
 describe('computeBackoffDelayMs', () => {
@@ -136,5 +137,71 @@ describe('computeBackoffDelayMs', () => {
     expect(() => computeBackoffDelayMs(NaN)).toThrow(RangeError);
     expect(() => computeBackoffDelayMs(-1)).toThrow(RangeError);
     expect(() => computeBackoffDelayMs(Infinity)).toThrow(RangeError);
+  });
+});
+
+describe('computeBackoffDelayMs property tests', () => {
+  const attemptArb = fc.integer({ min: 0, max: 30 });
+  const baseMsArb = fc.integer({ min: 1, max: 10000 });
+  const maxMsArb = fc.integer({ min: 1, max: 60000 });
+
+  it('always returns a delay within [0, maxMs] with jitter enabled', () => {
+    fc.assert(
+      fc.property(attemptArb, baseMsArb, maxMsArb, (attempt, baseMs, maxMs) => {
+        const delay = computeBackoffDelayMs(attempt, { baseMs, maxMs, jitter: true });
+        expect(delay).toBeGreaterThanOrEqual(0);
+        expect(delay).toBeLessThanOrEqual(maxMs);
+        expect(Number.isFinite(delay)).toBe(true);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it('always returns a delay within [0, maxMs] with jitter disabled', () => {
+    fc.assert(
+      fc.property(attemptArb, baseMsArb, maxMsArb, (attempt, baseMs, maxMs) => {
+        const delay = computeBackoffDelayMs(attempt, { baseMs, maxMs, jitter: false });
+        expect(delay).toBeGreaterThanOrEqual(0);
+        expect(delay).toBeLessThanOrEqual(maxMs);
+        expect(Number.isFinite(delay)).toBe(true);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it('equals min(maxMs, baseMs * 2**attempt) when jitter is disabled', () => {
+    fc.assert(
+      fc.property(attemptArb, baseMsArb, maxMsArb, (attempt, baseMs, maxMs) => {
+        const expected = Math.min(maxMs, baseMs * 2 ** attempt);
+        expect(computeBackoffDelayMs(attempt, { baseMs, maxMs, jitter: false })).toBe(expected);
+        expect(
+          computeBackoffDelayMs(attempt, { baseMs, maxMs, jitterStrategy: 'none' }),
+        ).toBe(expected);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it('is monotonically non-decreasing in attempt when jitter is disabled', () => {
+    fc.assert(
+      fc.property(attemptArb, baseMsArb, maxMsArb, (attempt, baseMs, maxMs) => {
+        const lower = computeBackoffDelayMs(attempt, { baseMs, maxMs, jitter: false });
+        const higher = computeBackoffDelayMs(attempt + 1, { baseMs, maxMs, jitter: false });
+        expect(higher).toBeGreaterThanOrEqual(lower);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it('is deterministic for a fixed randomFn', () => {
+    const randomArb = fc.double({ min: 0, max: 0.9999, noNaN: true });
+    fc.assert(
+      fc.property(attemptArb, baseMsArb, maxMsArb, randomArb, (attempt, baseMs, maxMs, r) => {
+        const first = computeBackoffDelayMs(attempt, { baseMs, maxMs, randomFn: () => r });
+        const second = computeBackoffDelayMs(attempt, { baseMs, maxMs, randomFn: () => r });
+        expect(first).toBe(second);
+      }),
+      { numRuns: 200 },
+    );
   });
 });
