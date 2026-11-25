@@ -16,6 +16,34 @@ import { type AnyTracer, NoopTracer, type TracingContext } from './tracing';
  */
 export const WEBHOOK_SCHEMA_VERSION = 1;
 
+/**
+ * Returns the webhook payload schema version currently emitted by
+ * {@link HttpWebhookSender}. Contract tests use this to select the matching
+ * JSON Schema file (e.g. `schemas/webhook.v1.schema.json`) and validate the
+ * sender's serialized output against it.
+ */
+export function getWebhookSchemaVersion(): number {
+  return WEBHOOK_SCHEMA_VERSION;
+}
+
+/**
+ * Shape of a single-event webhook payload (the body emitted when batching is
+ * disabled). Mirrors `schemas/webhook.v1.schema.json`.
+ */
+export interface WebhookEventPayload {
+  event: RawContractEvent;
+}
+
+/**
+ * Shape of a batched webhook payload (the body emitted when `batchSize > 1`).
+ * Mirrors `schemas/webhook.v1.schema.json`.
+ */
+export interface WebhookBatchPayload {
+  events: RawContractEvent[];
+}
+
+export type WebhookPayload = WebhookEventPayload | WebhookBatchPayload;
+
 export interface WebhookSender {
   send(event: RawContractEvent): Promise<void>;
 }
@@ -184,7 +212,8 @@ export class HttpWebhookSender implements WebhookSender {
    */
   async send(event: RawContractEvent): Promise<void> {
     if (this.batchSize <= 1) {
-      return this.deliver(JSON.stringify({ event }), event.id, [event.id]);
+      const payload: WebhookEventPayload = { event };
+      return this.deliver(JSON.stringify(payload), event.id, [event.id]);
     }
     return new Promise<void>((resolve, reject) => {
       this.buffer.push({ event, resolve, reject });
@@ -213,7 +242,8 @@ export class HttpWebhookSender implements WebhookSender {
     // Stable across retries of the same batch, so receivers can deduplicate.
     const idempotencyKey = createHmac('sha256', 'batch').update(ids.join(',')).digest('hex');
     try {
-      await this.deliver(JSON.stringify({ events }), idempotencyKey, ids);
+      const payload: WebhookBatchPayload = { events };
+      await this.deliver(JSON.stringify(payload), idempotencyKey, ids);
       pending.forEach((p) => p.resolve());
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
@@ -231,6 +261,8 @@ export class HttpWebhookSender implements WebhookSender {
       'Content-Type': 'application/json',
       // Derived from the event id, so identical across retries of one event.
       'Idempotency-Key': idempotencyKey,
+      // Lets receivers pick the matching payload schema for this delivery.
+      'X-Compliance-Schema-Version': String(WEBHOOK_SCHEMA_VERSION),
     };
 
     if (this.signingSecrets.length > 0) {

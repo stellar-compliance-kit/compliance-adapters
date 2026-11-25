@@ -6,13 +6,16 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+
 jobs:
   test-unit:
     name: Lint & Unit Tests (TypeScript)
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [20.x, 22.x]
+        node-version: [22.x, 24.x]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -111,7 +114,7 @@ jobs:
     needs: test-unit
     strategy:
       matrix:
-        node-version: [20.x, 22.x]
+        node-version: [22.x, 24.x]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -183,7 +186,7 @@ jobs:
     needs: [test-unit]
     strategy:
       matrix:
-        node-version: [20.x, 22.x]
+        node-version: [22.x, 24.x]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -231,6 +234,31 @@ jobs:
         env:
           # Pass contract ID if pre-deployed; otherwise tests will deploy fresh
           TEST_CONTRACT_ID: ${{ secrets.TEST_CONTRACT_ID }}
+
+  smoke-pack:
+    name: Package Smoke Test (npm pack + import)
+    runs-on: ubuntu-latest
+    needs: test-unit
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.x
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+
+      - name: Smoke-test packed tarballs
+        # Packs each published package, installs it into a temp project and
+        # imports it to catch missing files / wrong exports (issue #1045).
+        run: node scripts/smoke-pack.js
 
   # No Rust/Soroban adapter contracts exist in this repo yet. If one is added
   # under a package with a Cargo.toml, add a matching `cargo test` job here.

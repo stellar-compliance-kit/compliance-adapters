@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://horizon-listener/schemas/v1.json",
+  "title": "Horizon Listener Webhook Payload (v1)",
+  "description": "Webhook payload schema for WEBHOOK_SCHEMA_VERSION = \"v1\". Supports both a single-event body `{ event }` and a batched body `{ events }`.",
+  "oneOf": [
+    { "$ref": "#/definitions/singleEventBody" },
+    { "$ref": "#/definitions/batchedEventsBody" }
+  ],
+  "definitions": {
+    "rawContractEvent": {
+      "type": "object",
+      "description": "A raw contract event emitted by the Stellar network.",
+      "additionalProperties": false,
+      "required": ["id", "contractId", "ledger", "topic", "value"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the contract event."
+        },
+        "contractId": {
+          "type": "string",
+          "description": "Contract identifier (e.g. C... address) that emitted the event."
+        },
+        "ledger": {
+          "type": "integer",
+          "description": "Ledger sequence number in which the event was emitted.",
+          "minimum": 0
+        },
+        "topic": {
+          "type": "array",
+          "description": "Ordered list of topic segments (typically base64-encoded XDR values).",
+          "items": { "type": "string" }
+        },
+        "value": {
+          "type": "string",
+          "description": "Base64-encoded XDR value of the event body."
+        }
+      }
+    },
+    "singleEventBody": {
+      "type": "object",
+      "description": "Single-event webhook body.",
+      "additionalProperties": false,
+      "required": ["event"],
+      "properties": {
+        "event": { "$ref": "#/definitions/rawContractEvent" }
+      }
+    },
+    "batchedEventsBody": {
+      "type": "object",
+      "description": "Batched webhook body containing multiple events.",
+      "additionalProperties": false,
+      "required": ["events"],
+      "properties": {
+        "events": {
+          "type": "array",
+          "description": "List of contract events included in this batch.",
+          "items": { "$ref": "#/definitions/rawContractEvent" }
+        }
+      }
+    }
+  }
+}
