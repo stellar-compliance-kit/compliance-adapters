@@ -8,6 +8,7 @@
 import { Keypair } from '@stellar/stellar-sdk';
 import { syncSanctionsToDenylist, DenylistWriter } from '../src/sync';
 import { InMemoryCheckpointStore, SyncCheckpointStore } from '../src/checkpoint';
+import { InMemoryProviderCache, ProviderCache } from '../src/providerCache';
 import { MockSanctionsProvider, MOCK_FLAGGED_ADDRESSES } from '../src/mockProvider';
 
 const FLAGGED_ADDRESSES = Object.keys(MOCK_FLAGGED_ADDRESSES);
@@ -201,5 +202,157 @@ describe('syncSanctionsToDenylist — checkpointing (issue #598)', () => {
 
     expect(backing.has(FLAGGED_ADDRESS)).toBe(true);
     expect(backing.has(CLEAN_ADDRESS)).toBe(true);
+  });
+});
+
+describe('InMemoryProviderCache (issue #1062)', () => {
+  it('stores and returns a cached provider result within the TTL', async () => {
+    const cache = new InMemoryProviderCache({ ttlMs: 60_000 });
+    const body = { addresses: [FLAGGED_ADDRESS] };
+
+    await cache.set('mock', { body, etag: '"v1"', lastModified: 'Wed, 21 Oct 2015 07:28:00 GMT' });
+
+    const entry = await cache.get('mock');
+    expect(entry).not.toBeNull();
+    expect(entry!.body).toEqual(body);
+    expect(entry!.etag).toBe('"v1"');
+    expect(entry!.lastModified).toBe('Wed, 21 Oct 2015 07:28:00 GMT');
+  });
+
+  it('returns null for an unknown provider', async () => {
+    const cache = new InMemoryProviderCache({ ttlMs: 60_000 });
+    expect(await cache.get('never-seen')).toBeNull();
+  });
+
+  it('expires entries once the TTL has elapsed', async () => {
+    let now = 1_000;
+    const cache = new InMemoryProviderCache({ ttlMs: 500, now: () => now });
+    await cache.set('mock', { body: { addresses: [FLAGGED_ADDRESS] } });
+
+    now += 499;
+    expect(await cache.get('mock')).not.toBeNull();
+
+    now += 2;
+    expect(await cache.get('mock')).toBeNull();
+  });
+
+  it('supports an async cache store', async () => {
+    const backing = new Map<string, unknown>();
+    const asyncCache: ProviderCache = {
+      get: async (key) => (backing.get(key) as never) ?? null,
+      set: async (key, entry) => {
+        backing.set(key, entry);
+      },
+    };
+
+    await asyncCache.set('mock', { body: { addresses: [] } });
+    expect(await asyncCache.get('mock')).not.toBeNull();
+  });
+});
+
+describe('syncSanctionsToDenylist — provider cache (issue #1062)', () => {
+  it('reuses cached provider data on a second run instead of refetching', async () => {
+    const cache = new InMemoryProviderCache({ ttlMs: 60_000 });
+    const firstProvider = new MockSanctionsProvider();
+    const firstFetchSpy = jest.spyOn(firstProvider, 'fetchAddresses');
+
+    await syncSanctionsToDenylist({
+      provider: firstProvider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer: makeFakeWriter(),
+      dryRun: true,
+      cache,
+    });
+    expect(firstFetchSpy).toHaveBeenCalledTimes(1);
+
+    const secondProvider = new MockSanctionsProvider();
+    const secondFetchSpy = jest.spyOn(secondProvider, 'fetchAddresses');
+
+    const result = await syncSanctionsToDenylist({
+      provider: secondProvider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer: makeFakeWriter(),
+      dryRun: true,
+      cache,
+    });
+
+    // Cache hit: the provider is not asked to fetch again.
+    expect(secondFetchSpy).not.toHaveBeenCalled();
+    expect(result.flagged).toEqual([FLAGGED_ADDRESS]);
+  });
+
+  it('reuses the cached body when the provider answers 304 Not Modified', async () => {
+    const cache = new InMemoryProviderCache({ ttlMs: 60_000 });
+    const body = [FLAGGED_ADDRESS];
+
+    await cache.set('mock', { body, etag: '"v1"' });
+
+    const provider = new MockSanctionsProvider();
+    const fetchSpy = jest
+      .spyOn(provider, 'fetchAddresses')
+      .mockResolvedValue({ notModified: true, etag: '"v1"' } as never);
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer: makeFakeWriter(),
+      dryRun: true,
+      cache,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledWith(expect.objectContaining({ etag: '"v1"' }));
+    expect(result.flagged).toEqual([FLAGGED_ADDRESS]);
+    // The cached entry survives a 304 and its TTL is refreshed.
+    expect(await cache.get('mock')).not.toBeNull();
+  });
+
+  it('refetches in full once the cached entry has expired', async () => {
+    let now = 1_000;
+    const cache = new InMemoryProviderCache({ ttlMs: 500, now: () => now });
+
+    await syncSanctionsToDenylist({
+      provider: new MockSanctionsProvider(),
+      addresses: [FLAGGED_ADDRESS],
+      writer: makeFakeWriter(),
+      dryRun: true,
+      cache,
+    });
+
+    now += 1_000;
+
+    const provider = new MockSanctionsProvider();
+    const fetchSpy = jest.spyOn(provider, 'fetchAddresses');
+
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer: makeFakeWriter(),
+      dryRun: true,
+      cache,
+    });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('--no-cache bypasses both cache reads and writes', async () => {
+    const cache = new InMemoryProviderCache({ ttlMs: 60_000 });
+    const getSpy = jest.spyOn(cache, 'get');
+    const setSpy = jest.spyOn(cache, 'set');
+
+    const provider = new MockSanctionsProvider();
+    const fetchSpy = jest.spyOn(provider, 'fetchAddresses');
+
+    await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS],
+      writer: makeFakeWriter(),
+      dryRun: true,
+      cache,
+      noCache: true,
+    });
+
+    expect(getSpy).not.toHaveBeenCalled();
+    expect(setSpy).not.toHaveBeenCalled();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 });

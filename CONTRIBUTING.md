@@ -157,6 +157,121 @@ repeating the code.
 - **Document the boundary**: Update this section of CONTRIBUTING.md if you create a new shared
   package, including its purpose and which packages depend on it.
 
+## Adding a sanctions provider
+
+`sanctions-oracle` checks addresses against a pluggable sanctions/watchlist data source. A
+provider is any object implementing the `SanctionsProvider` interface:
+
+```ts
+interface SanctionsProvider {
+  /** Human-readable provider name, used in logs and error messages. */
+  readonly name: string;
+  /** Returns whether `address` is flagged, and where that verdict came from. */
+  checkAddress(address: string): Promise<{ flagged: boolean; source: string; score?: number }>;
+}
+```
+
+- `flagged` — `true` if the address appears on the provider's watchlist.
+- `source` — a short identifier for the data source (e.g. `"ofac-sdn"`), surfaced in logs and
+  sync results so operators can tell which list produced a verdict.
+- `score` — optional confidence/risk score in `[0, 1]`; omit it if the provider has no notion of
+  a score.
+
+### Minimal provider template
+
+Create `sanctions-oracle/src/providers/<name>.ts`:
+
+```ts
+import type { SanctionsProvider } from "../types.js";
+
+export interface ExampleProviderOptions {
+  /** Base URL of the watchlist API. */
+  baseUrl: string;
+  /** Injected for tests; defaults to global fetch. */
+  fetchImpl?: typeof fetch;
+}
+
+export class ExampleProvider implements SanctionsProvider {
+  readonly name = "example";
+
+  constructor(private readonly options: ExampleProviderOptions) {}
+
+  async checkAddress(address: string): Promise<{ flagged: boolean; source: string }> {
+    const fetchImpl = this.options.fetchImpl ?? fetch;
+    const res = await fetchImpl(`${this.options.baseUrl}/check?address=${encodeURIComponent(address)}`);
+    if (!res.ok) {
+      throw new Error(`example provider request failed: ${res.status}`);
+    }
+    const body = (await res.json()) as { listed: boolean };
+    return { flagged: body.listed, source: "example" };
+  }
+}
+```
+
+Keep providers stateless where possible, accept an injectable `fetchImpl` so tests don't hit the
+network, and throw on transport/HTTP errors rather than silently returning `flagged: false` — the
+sync path treats thrown errors as retryable.
+
+### Registering the provider
+
+1. Export the provider from `sanctions-oracle/src/index.ts` alongside the existing exports:
+
+   ```ts
+   export { ExampleProvider } from "./providers/example.js";
+   export type { ExampleProviderOptions } from "./providers/example.js";
+   ```
+
+2. Register it with the `ProviderRegistry` so callers can look it up by name:
+
+   ```ts
+   import { ProviderRegistry, ExampleProvider } from "@compliance-adapters/sanctions-oracle";
+
+   const registry = new ProviderRegistry();
+   registry.register(new ExampleProvider({ baseUrl: "https://example.test" }));
+   ```
+
+3. Add a changeset (`npm run changeset`) — a new provider is a public API addition.
+
+### Testing the provider
+
+Every provider must pass the shared contract test. Add a test file under
+`sanctions-oracle/test/` that calls `assertSanctionsProviderContract` from
+`sanctions-oracle/test/providerContract.ts` with fixture data:
+
+```ts
+import { describe, it } from "node:test";
+import { assertSanctionsProviderContract } from "./providerContract.js";
+import { ExampleProvider } from "../src/providers/example.js";
+import addresses from "./fixtures/addresses.json" with { type: "json" };
+
+describe("ExampleProvider", () => {
+  it("satisfies the SanctionsProvider contract", async () => {
+    await assertSanctionsProviderContract(
+      () =>
+        new ExampleProvider({
+          baseUrl: "https://example.test",
+          // Stub fetch so the contract test stays offline and deterministic.
+          fetchImpl: async (input) => {
+            const address = new URL(String(input)).searchParams.get("address");
+            const listed = addresses.flagged.includes(address);
+            return new Response(JSON.stringify({ listed }), { status: 200 });
+          },
+        }),
+      {
+        flaggedAddress: addresses.flagged[0],
+        cleanAddress: addresses.clean[0],
+      },
+    );
+  });
+});
+```
+
+The contract helper exercises the interface's guarantees (shape of the result, `source` present,
+errors propagated) so you don't need to re-test them per provider. Add provider-specific tests
+(e.g. response parsing, non-2xx handling) alongside it. Fixture addresses live in
+`sanctions-oracle/test/fixtures/addresses.json`; extend that file if you need new cases, and never
+put real personal data in fixtures.
+
 ## Code style
 
 - TypeScript, Node 20+. Formatting is enforced by Prettier/ESLint (`npm run lint`).

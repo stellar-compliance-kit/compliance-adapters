@@ -214,6 +214,103 @@ README).
   events that endpoint returns — the same "garbage in, garbage out" trust dependency described for
   `sanctions-oracle`'s provider above applies here to the RPC endpoint choice.
 
+### Webhook secret rotation
+
+`HttpWebhookSenderOptions.signingSecret` accepts either a single secret (`string`) or an array of
+secrets (`string[]`), and the receiver-side `verifyWebhookSignature` helper accepts the same
+`string | string[]` shape — a request is considered valid if its `X-Signature` matches the HMAC
+computed with *any* of the supplied secrets. That multi-secret support exists specifically so a
+`signingSecret` can be rotated without a delivery outage: the sender can sign with both the old and
+new secret during an overlap window while receivers are migrated. The sender does not pick a
+"current" secret — when given an array it emits one signature per secret (see
+`horizon-listener/README.md` for the exact header format) — so the procedure below is about
+coordinating *which* secrets each side holds, not about a built-in rotation state machine.
+
+Rotation is a two-sided operation: the sender (this package) and the receiver (whatever you point
+`HttpWebhookSender` at) each hold a copy of the secret, and they must be updated in an order that
+never leaves the receiver unable to verify a delivery it receives. The safe order is **add the new
+secret everywhere before removing the old one anywhere**:
+
+1. **Generate a new secret.** Use a cryptographically secure random value of at least 32 bytes
+   (e.g. `openssl rand -hex 32`). Store it in the same secret manager / CI secret store that holds
+   the current `signingSecret`; never commit it to source control or log it.
+2. **Add the new secret alongside the old one in the sender config and deploy.** Change
+   `signingSecret` from a string to an array containing both secrets, old first (order is not
+   security-significant, but keeping the old one first makes the diff and rollback obvious):
+   ```ts
+   // before
+   const sender = new HttpWebhookSender({
+     url: "https://example.com/webhooks/events",
+     signingSecret: process.env.WEBHOOK_SIGNING_SECRET!,
+   });
+
+   // during rotation: sign with both secrets
+   const sender = new HttpWebhookSender({
+     url: "https://example.com/webhooks/events",
+     signingSecret: [
+       process.env.WEBHOOK_SIGNING_SECRET_OLD!, // being retired
+       process.env.WEBHOOK_SIGNING_SECRET_NEW!, // being introduced
+     ],
+   });
+   ```
+   Deploy this and confirm deliveries are being sent with signatures for both secrets before
+   moving on.
+3. **Confirm receivers accept signatures from both secrets during the overlap window.** Update
+   each receiver to verify against both secrets (again, old first) and deploy it:
+   ```ts
+   // receiver: accept either secret while the overlap window is open
+   const valid = verifyWebhookSignature({
+     body: rawBody,
+     timestamp: req.headers["x-timestamp"],
+     signature: req.headers["x-signature"],
+     secret: [
+       process.env.WEBHOOK_SIGNING_SECRET_OLD!,
+       process.env.WEBHOOK_SIGNING_SECRET_NEW!,
+     ],
+   });
+   ```
+   Watch receiver logs/error rates until you've seen successful verifications from both sides of
+   the rotation (i.e. no signature-verification failures attributable to the new secret). Keep the
+   overlap window as short as your deploy and observation cadence allows — long enough to cover
+   every receiver instance and any in-flight retries, but not so long that the old secret lingers
+   unnecessarily. A window measured in hours to a day is typical; there is no built-in expiry, so
+   the window is entirely under your operational control.
+4. **Update receivers to verify with the new secret only.** Once every receiver has been running
+   with both secrets and you've confirmed the new secret verifies cleanly, drop the old secret from
+   the receiver configuration and redeploy:
+   ```ts
+   const valid = verifyWebhookSignature({
+     body: rawBody,
+     timestamp: req.headers["x-timestamp"],
+     signature: req.headers["x-signature"],
+     secret: process.env.WEBHOOK_SIGNING_SECRET_NEW!,
+   });
+   ```
+   At this point receivers will reject anything signed only with the old secret — which is fine,
+   because the sender is still signing with both.
+5. **Remove the old secret from the sender config and redeploy.** With every receiver now on the
+   new secret, shrink the sender's `signingSecret` back to a single value:
+   ```ts
+   const sender = new HttpWebhookSender({
+     url: "https://example.com/webhooks/events",
+     signingSecret: process.env.WEBHOOK_SIGNING_SECRET_NEW!,
+   });
+   ```
+6. **Verify deliveries are signed only with the new secret.** Confirm the sender is no longer
+   emitting a signature for the old secret (check the `X-Signature` header(s) on a live delivery,
+   or the sender's own tests/logs), then revoke/delete the old secret from your secret store so it
+   can't be reintroduced by accident.
+
+**Rollback.** If signature verification starts failing at any step — most likely because a
+receiver instance was missed in step 3 or 4, or a deploy rolled back to an older receiver build —
+re-add the old secret to the sender's `signingSecret` array (step 2's configuration) and redeploy
+the sender first, so deliveries are again signed with a secret the lagging receivers still hold.
+Then fix the receiver rollout and restart the procedure from step 3. Because the sender signs with
+every secret in the array, re-adding the old secret is always safe and immediately restores
+verification for receivers that still expect it; only remove it again once you've re-confirmed
+step 3's "both secrets verify" condition. Do not delete the old secret from your secret store until
+step 6 is complete, or rollback will require generating yet another secret.
+
 ---
 
 ## Reporting a vulnerability

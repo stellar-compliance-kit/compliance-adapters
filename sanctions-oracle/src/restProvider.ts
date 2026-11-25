@@ -35,6 +35,8 @@
 import type { SanctionsProvider } from './SanctionsProvider';
 import { normalizeStellarAddress } from '@compliance-adapters/shared';
 import { NoopTracer, type AnyTracer, type TracingContext } from './tracing';
+import type { ProviderCache } from './providerCache';
+import type { ProviderCache } from './providerCache';
 
 /** Shape returned by the hypothetical watchlist REST API. */
 interface SanctionsApiResponse {
@@ -64,6 +66,16 @@ export interface RestSanctionsProviderOptions {
   parentContext?: TracingContext;
   /** When `false`, no `traceparent` header is sent. Defaults to `true`. */
   propagateTraceContext?: boolean;
+  /**
+   * Optional persistent cache used to store provider responses keyed by
+   * provider + list version.  When omitted, every call hits the network.
+   */
+  cache?: ProviderCache;
+  /**
+   * Cache entry TTL in milliseconds.  Entries older than this are treated as
+   * stale and re-fetched unconditionally.  Defaults to 24 hours.
+   */
+  cacheTtlMs?: number;
 }
 
 /**
@@ -80,6 +92,8 @@ export class RestSanctionsProvider implements SanctionsProvider {
   private readonly tracer: AnyTracer;
   private readonly parentContext: TracingContext | undefined;
   private readonly propagateTraceContext: boolean;
+  private readonly cache: ProviderCache | undefined;
+  private readonly cacheTtlMs: number;
 
   constructor(options: RestSanctionsProviderOptions) {
     this.apiBaseUrl = options.apiBaseUrl.replace(/\/$/, ''); // strip trailing slash
@@ -91,6 +105,8 @@ export class RestSanctionsProvider implements SanctionsProvider {
     this.tracer = options.tracer ?? new NoopTracer();
     this.parentContext = options.parentContext;
     this.propagateTraceContext = options.propagateTraceContext !== false;
+    this.cache = options.cache;
+    this.cacheTtlMs = options.cacheTtlMs ?? 24 * 60 * 60 * 1_000;
   }
 
   async checkAddress(rawAddress: string): Promise<{ flagged: boolean; source: string }> {
@@ -108,6 +124,16 @@ export class RestSanctionsProvider implements SanctionsProvider {
         traceId: span.traceId,
         spanId: span.spanId,
       });
+    }
+
+    // Look up a cached entry for this address.  When present and within TTL,
+    // send conditional request headers so the provider can answer 304.
+    const cacheKey = `rest:${this.apiBaseUrl}:${address}`;
+    const cached = this.cache ? await this.cache.get(cacheKey) : undefined;
+    const cacheFresh = cached !== undefined && Date.now() - cached.storedAt < this.cacheTtlMs;
+    if (cacheFresh && cached) {
+      if (cached.etag) headers['If-None-Match'] = cached.etag;
+      if (cached.lastModified) headers['If-Modified-Since'] = cached.lastModified;
     }
 
     // AbortController-based timeout — the `timeout` property on RequestInit is
@@ -134,6 +160,16 @@ export class RestSanctionsProvider implements SanctionsProvider {
       clearTimeout(timeoutHandle);
     }
 
+    // 304 Not Modified — reuse the cached body without re-downloading it.
+    if (response.status === 304 && cached) {
+      span.end('ok');
+      const cachedData = cached.body as SanctionsApiResponse;
+      return {
+        flagged: cachedData.is_flagged,
+        source: cachedData.lists.join(',') || 'external-watchlist-api',
+      };
+    }
+
     if (!response.ok) {
       span.end('error', new Error(`HTTP ${response.status}`));
       throw new Error(
@@ -143,6 +179,16 @@ export class RestSanctionsProvider implements SanctionsProvider {
 
     const data = (await response.json()) as SanctionsApiResponse;
     span.end('ok');
+
+    // Persist the fresh body together with its validators for the next run.
+    if (this.cache) {
+      await this.cache.set(cacheKey, {
+        body: data,
+        etag: response.headers.get('etag') ?? undefined,
+        lastModified: response.headers.get('last-modified') ?? undefined,
+        storedAt: Date.now(),
+      });
+    }
 
     return {
       flagged: data.is_flagged,

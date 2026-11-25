@@ -162,6 +162,46 @@ adapts the free Chainalysis sanctions screening API to `SanctionsProvider`
 (API key via `CHAINALYSIS_API_KEY`, response mapping, and
 `RateLimitedSanctionsProvider` wrapping).
 
+## Using `OpenSanctionsProvider`
+
+`OpenSanctionsProvider` is a built-in provider backed by
+[OpenSanctions](https://www.opensanctions.org/), which aggregates many
+official sanctions and watchlists (including crypto wallet identifiers)
+behind a single API. One provider therefore covers several jurisdictions.
+
+```ts
+import { OpenSanctionsProvider, syncSanctionsToDenylist } from 'sanctions-oracle';
+
+const provider = new OpenSanctionsProvider({
+  apiKey: process.env.OPENSANCTIONS_API_KEY!, // optional for the public dataset
+});
+
+await syncSanctionsToDenylist({ provider, addresses, writer });
+```
+
+| Option | Description |
+|---|---|
+| `apiKey` | OpenSanctions API key, sent as `Authorization: ApiKey <key>`. Defaults to the `OPENSANCTIONS_API_KEY` environment variable. Optional when querying the public dataset. |
+| `apiBaseUrl` | Base URL of the OpenSanctions API. Defaults to `https://api.opensanctions.org`. A trailing slash is stripped automatically. |
+| `dataset` | Dataset to query (e.g. `default`, `sanctions`, `crypto`). Defaults to `default`. |
+| `timeoutMs` | Request timeout in milliseconds. Defaults to `5000`. Implemented via `AbortController`. |
+| `fetchImpl` | Injectable `fetch` implementation. Defaults to the global `fetch`. Override in tests to avoid real network I/O. |
+| `cache` | Optional `ProviderResultCache` used to memoize per-address lookups (see [Caching provider results](#caching-provider-results-providerresultcache)). |
+
+The provider queries the OpenSanctions `/search/<dataset>` endpoint with the
+address as the search term and filters the response to entities that carry a
+**Stellar address identifier** (`G...` Stellar account IDs, matched via
+`normalizeStellarAddress()`), so hits on unrelated identifiers (names,
+other chains' wallets) are ignored. An address is reported as flagged only
+when a matching entity is found; `source` is the OpenSanctions entity ID(s)
+that matched, or `"opensanctions"` when the API returns no entity IDs.
+
+On non-2xx responses the provider throws an error including the HTTP status
+and the address; network failures and timeouts throw a descriptive error that
+`syncSanctionsToDenylist`'s retry logic handles. Wrap it in
+`RateLimitedSanctionsProvider` and/or `CircuitBreakerSanctionsProvider` for
+production use against the hosted API.
+
 ## The `SanctionsProvider` interface
 
 ```ts
@@ -259,6 +299,53 @@ await syncSanctionsToDenylist({ provider, addresses, writer, cache });
 
 `cache.delete(address)` drops a single stale entry and `cache.clear()`
 empties the cache.
+
+### Persistent provider cache across runs
+
+`ProviderResultCache` is in-memory only: every sync run starts cold and
+re-fetches every provider in full. To cut provider load and speed up runs
+when upstream lists have not changed, use a persistent cache backed by a
+`ProviderCacheStore`:
+
+- `FileProviderCacheStore(path)` — stores entries as JSON alongside the
+  checkpoint file. Writes are atomic (written to `<path>.tmp`, then renamed),
+  and a corrupt or truncated file is moved aside to
+  `<path>.corrupt-<timestamp>` with a warning instead of crashing the sync.
+- `RedisProviderCacheStore({ client, prefix? })` — stores entries in Redis
+  under `<prefix>:<provider>:<address>` keys with a TTL.
+
+```ts
+import {
+  FileProviderCacheStore,
+  PersistentProviderCache,
+  syncSanctionsToDenylist,
+} from 'sanctions-oracle';
+
+const cache = new PersistentProviderCache({
+  store: new FileProviderCacheStore('./.sanctions-cache.json'),
+  ttlMs: 6 * 60 * 60_000, // 6 hours (default: 1 hour)
+});
+
+await syncSanctionsToDenylist({ provider, addresses, writer, cache });
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `store` | — | Backing `ProviderCacheStore` (`FileProviderCacheStore` or `RedisProviderCacheStore`). |
+| `ttlMs` | `3_600_000` | How long a cached result stays valid. Entries older than the TTL are re-fetched. |
+| `providerId` | provider name | Cache key namespace, so several providers can share one store. |
+
+**Conditional requests.** Where a provider supports it (e.g.
+`OpenSanctionsProvider` and `RestSanctionsProvider`), the cache stores the
+response `ETag` / `Last-Modified` header alongside the result and sends it
+back as `If-None-Match` / `If-Modified-Since` on the next run. A `304 Not
+Modified` response refreshes the entry's TTL without re-downloading the body.
+
+**From the CLI**, the persistent cache is enabled by default at
+`--cache-file <path>` (default `.sanctions-cache.json`, next to the
+checkpoint file). Pass `--cache-ttl <ms>` to change the TTL and
+`--no-cache` to disable the persistent cache entirely for a run (useful for
+one-off audits that must see fresh provider data).
 
 ### Concurrency and progress logging
 
@@ -389,6 +476,7 @@ fill in the `sanctions-oracle` variables before running a live sync:
 | `STELLAR_NETWORK_PASSPHRASE` | `--network-passphrase` | Must match the network the RPC endpoint serves |
 | `DENYLIST_GATE_CONTRACT_ID` | `--contract-id` | Deployed `denylist-gate` contract to write flagged addresses into |
 | `SANCTIONS_ORACLE_SECRET_KEY` | `--secret-key` | Signing keypair that funds and signs denylist transactions (preferred over the CLI flag, which is visible in shell history) |
+| `OPENSANCTIONS_API_KEY` | `--opensanctions-api-key` | API key for `OpenSanctionsProvider` (optional for the public dataset) |
 
 See the comments in `.env.example` for allowed values and testnet guidance.
 

@@ -78,6 +78,9 @@ Run \`compliance-adapters <command> --help\` for command-specific flags.
  *   --rpc-url <url>             Soroban RPC endpoint
  *   --network-passphrase <str>  Stellar network passphrase
  *   --secret-key <key>          Source account secret key for signing transactions
+ *   --cache-dir <path>          Directory for the persistent provider cache
+ *   --cache-ttl-ms <n>          Provider cache TTL in milliseconds
+ *   --no-cache                  Bypass the provider cache (always re-fetch)
  *   --help                      Show this help message
  */
 async function runSyncSanctions(argv) {
@@ -94,6 +97,10 @@ Options:
   --rpc-url <url>             Soroban RPC endpoint (required unless --dry-run)
   --network-passphrase <str>  Stellar network passphrase (default: testnet)
   --secret-key <key>          Source account secret key (required unless --dry-run)
+  --cache-dir <path>          Directory for the persistent provider cache
+                              (default: alongside the checkpoint store)
+  --cache-ttl-ms <n>          Provider cache TTL in milliseconds (default: provider default)
+  --no-cache                  Bypass the provider cache and always re-fetch provider lists
   --help                      Show this help message
 `.trim());
     return;
@@ -117,6 +124,24 @@ Options:
   const dryRun = 'dry-run' in args;
   const networkPassphrase = args['network-passphrase'] ?? Networks.TESTNET;
 
+  // Cache options (#1062): --no-cache bypasses the persistent provider cache,
+  // --cache-ttl-ms overrides the TTL, --cache-dir overrides the storage location.
+  const noCache = 'no-cache' in args;
+  const cacheTtlMs =
+    args['cache-ttl-ms'] !== undefined ? parseInt(args['cache-ttl-ms'], 10) : undefined;
+  if (cacheTtlMs !== undefined && (!Number.isInteger(cacheTtlMs) || cacheTtlMs < 0)) {
+    console.error('Invalid flag: --cache-ttl-ms must be a non-negative integer');
+    process.exitCode = 1;
+    return;
+  }
+  const cacheDir = typeof args['cache-dir'] === 'string' ? args['cache-dir'] : undefined;
+
+  const cacheOptions = {
+    cache: !noCache,
+    ...(cacheTtlMs !== undefined ? { cacheTtlMs } : {}),
+    ...(cacheDir !== undefined ? { cacheDir } : {}),
+  };
+
   if (dryRun) {
     const result = await syncSanctionsToDenylist({
       provider,
@@ -127,6 +152,7 @@ Options:
         },
       },
       dryRun: true,
+      ...cacheOptions,
     });
     console.log(JSON.stringify(result, null, 2));
     return;
@@ -149,7 +175,13 @@ Options:
     sourceKeypair: Keypair.fromSecret(args['secret-key']),
   });
 
-  const result = await syncSanctionsToDenylist({ provider, addresses, writer, dryRun: false });
+  const result = await syncSanctionsToDenylist({
+    provider,
+    addresses,
+    writer,
+    dryRun: false,
+    ...cacheOptions,
+  });
   console.log(JSON.stringify(result, null, 2));
 }
 

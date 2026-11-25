@@ -1071,6 +1071,10 @@ export interface CliArgs {
   auditLogPath?: string;
   /** Path to a checkpoint file; addresses completed by a prior run are skipped. */
   checkpointPath?: string;
+  /** Time-to-live for cached provider results, in milliseconds. */
+  cacheTtlMs?: number;
+  /** Disable the persistent provider-result cache entirely. */
+  noCache?: boolean;
 }
 
 /** Logger that writes every level to stderr, keeping stdout clean for `--json`. */
@@ -1163,6 +1167,18 @@ export function parseArgs(argv: string[]): CliArgs {
         args.checkpointPath = readValue(arg, i);
         i += 1;
         break;
+      case '--cache-ttl': {
+        const ms = Number(readValue(arg, i));
+        if (!Number.isFinite(ms) || ms <= 0) {
+          throw new Error('--cache-ttl must be a positive number of milliseconds');
+        }
+        args.cacheTtlMs = ms;
+        i += 1;
+        break;
+      }
+      case '--no-cache':
+        args.noCache = true;
+        break;
       case '--help':
       case '-h':
         args.help = true;
@@ -1208,6 +1224,9 @@ OPTIONS:
   --json                      Print only the JSON SyncResult on stdout; logs go to stderr
   --audit-log <path>          Append one JSON line per denylist write to <path>
   --checkpoint <path>         Persist completed addresses to <path> and skip them on re-run
+  --cache-ttl <ms>            Time-to-live for cached provider results, in milliseconds
+                               (default: 3600000, i.e. one hour)
+  --no-cache                  Disable the provider-result cache; every run re-fetches
   --help, -h                  Show this help message
 
 ENVIRONMENT:
@@ -1382,6 +1401,12 @@ export async function runCli(argv?: string[]): Promise<void> {
     ? new FileCheckpointStore(args.checkpointPath, logger)
     : undefined;
 
+  // Persistent provider-result cache, stored alongside the checkpoint store.
+  // --no-cache bypasses both reads and writes.
+  const cache = args.noCache
+    ? undefined
+    : new ProviderResultCache(args.cacheTtlMs ?? 3600000);
+
   const writer = createRpcDenylistWriter({
     rpcUrl: args.rpcUrl,
     networkPassphrase: args.networkPassphrase,
@@ -1409,6 +1434,7 @@ export async function runCli(argv?: string[]): Promise<void> {
     reconcile: args.reconcile,
     checkpoint,
     resume: Boolean(checkpoint),
+    ...(cache ? { cache } : {}),
   });
   // CLI-only: machine-readable result to stdout (see dry-run branch above).
   // eslint-disable-next-line no-console
