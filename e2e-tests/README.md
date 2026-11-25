@@ -24,6 +24,70 @@ An opt-in integration test that:
 
 This proves `RpcEventSource` + `HorizonListener` work with a live Soroban testnet, beyond mocked event sources.
 
+## Local End-to-End Stack (docker-compose)
+
+For a full local run of the compliance adapter flow — Stellar quickstart, Redis, `sep10-auth`, `sanctions-oracle` and `horizon-listener` — use the compose stack at `e2e-tests/docker-compose.yml`. This is the quickest way to exercise all services together against a local Stellar network without manual setup.
+
+### Services
+
+| Service | Role |
+| --- | --- |
+| `quickstart` | Stellar Quickstart (`stellar/quickstart:testing`) — isolated local network + Soroban RPC on port 8000 |
+| `redis` | Shared cache/state used by the services |
+| `sep10-auth` | SEP-10 challenge/verification service |
+| `sanctions-oracle` | Syncs sanctions data and writes to the denylist contract |
+| `horizon-listener` | Polls Soroban RPC for denylist events and reports them |
+
+### Prerequisites
+
+- Docker
+- Docker Compose (v2, i.e. the `docker compose` plugin)
+
+### Configuration
+
+```bash
+cp e2e-tests/.env.example e2e-tests/.env
+# Edit e2e-tests/.env and fill in the required values
+# (contract IDs, keypairs, RPC URL, Redis URL, etc.)
+```
+
+### Bring the Stack Up
+
+```bash
+docker compose -f e2e-tests/docker-compose.yml up --build
+```
+
+Add `-d` to run detached.
+
+### Verify Services Are Healthy
+
+```bash
+# Container status (all services should be "running"/"healthy")
+docker compose -f e2e-tests/docker-compose.yml ps
+
+# Quickstart / Soroban RPC is alive (405 on GET means it's up)
+curl -i http://localhost:8000/soroban/rpc
+
+# Follow logs for a specific service
+docker compose -f e2e-tests/docker-compose.yml logs -f horizon-listener
+```
+
+### Run the E2E Tests Against the Stack
+
+With the stack running, execute the e2e suite (it targets the local quickstart/RPC):
+
+```bash
+npm run test:e2e:test-only
+```
+
+### Tear Down
+
+```bash
+docker compose -f e2e-tests/docker-compose.yml down -v
+```
+
+`-v` also removes volumes so the next run starts from a clean state.
+
 ## Test Infrastructure
 
 ### Network Setup

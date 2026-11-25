@@ -3,7 +3,14 @@
  * SPDX-License-Identifier: MIT
  */
 
-import { createOtelTracer, OtelSpanLike, OtelTracerLike } from '../src/index';
+import {
+  ConsoleSpanExporter,
+  createOtelTracer,
+  DefaultTracer,
+  OtelSpanLike,
+  OtelTracerLike,
+  SpanData,
+} from '../src/index';
 
 /** In-memory fake OTel tracer/span for tests (no @opentelemetry/api needed). */
 class FakeOtelSpan implements OtelSpanLike {
@@ -90,5 +97,51 @@ describe('createOtelTracer (issue #826)', () => {
       traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
       spanId: '00f067aa0ba902b7',
     });
+  });
+});
+
+describe('ConsoleSpanExporter (issue #1031)', () => {
+  it('prints span name, duration and attributes', () => {
+    const lines: string[] = [];
+    const exporter = new ConsoleSpanExporter({ log: (line: string) => lines.push(line) });
+    const span: SpanData = {
+      name: 'address_check',
+      durationMs: 42,
+      attributes: { phase: 'address_check', retries: 2, ok: true },
+    };
+
+    exporter.export(span);
+
+    const output = lines.join('\n');
+    expect(output).toContain('address_check');
+    expect(output).toContain('42');
+    expect(output).toContain('phase');
+    expect(output).toContain('retries');
+    expect(output).toContain('2');
+    expect(output).toContain('ok');
+    expect(output).toContain('true');
+  });
+
+  it('is invoked by DefaultTracer with the expected span data', () => {
+    const exported: SpanData[] = [];
+    const consoleExporter = new ConsoleSpanExporter({ log: () => undefined });
+    const exportSpy = jest
+      .spyOn(consoleExporter, 'export')
+      .mockImplementation((span: SpanData) => {
+        exported.push(span);
+      });
+
+    const tracer = new DefaultTracer({ exporter: consoleExporter });
+    const span = tracer.startSpan('payment_check');
+    span.setAttribute('phase', 'payment_check');
+    span.setAttribute('retries', 1);
+    span.end('ok');
+
+    expect(exportSpy).toHaveBeenCalledTimes(1);
+    expect(exported).toHaveLength(1);
+    expect(exported[0].name).toBe('payment_check');
+    expect(typeof exported[0].durationMs).toBe('number');
+    expect(exported[0].durationMs).toBeGreaterThanOrEqual(0);
+    expect(exported[0].attributes).toEqual({ phase: 'payment_check', retries: 1 });
   });
 });

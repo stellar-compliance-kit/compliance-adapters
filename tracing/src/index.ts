@@ -453,3 +453,68 @@ class OtelTracerAdapter implements Tracer {
 export function createOtelTracer(otelTracer: OtelTracerLike): Tracer {
   return new OtelTracerAdapter(otelTracer);
 }
+
+// ── Console exporter ──────────────────────────────────────────────────────────
+
+/** Signature of a logger function accepted by {@link ConsoleSpanExporter}. */
+export type ConsoleLogger = (message: string) => void;
+
+export interface ConsoleSpanExporterOptions {
+  /**
+   * Logger used to emit each formatted span line. Defaults to `console.log`.
+   * Inject a custom function to capture output in tests.
+   */
+  logger?: ConsoleLogger;
+}
+
+/**
+ * A {@link SpanExporter} that prints each completed span to the console.
+ * Intended for local debugging when no OTLP collector is available.
+ *
+ * Output format (single line per span):
+ * ```
+ * [span] name=<name> durationMs=<n> status=<status> traceId=<id> spanId=<id> attributes={key=value, ...}
+ * ```
+ * Attributes are sorted by key so output is deterministic.
+ *
+ * @example
+ * ```ts
+ * import { DefaultTracer, ConsoleSpanExporter } from '@compliance-adapters/tracing';
+ *
+ * const tracer = new DefaultTracer({ exporter: new ConsoleSpanExporter() });
+ * ```
+ */
+export class ConsoleSpanExporter {
+  private readonly logger: ConsoleLogger;
+
+  constructor(options: ConsoleSpanExporterOptions = {}) {
+    this.logger = options.logger ?? ((message: string) => console.log(message));
+  }
+
+  /** Format a completed span as a single deterministic line. */
+  format(span: SpanData): string {
+    const attrs = Object.keys(span.attributes ?? {})
+      .sort()
+      .map((key) => `${key}=${String(span.attributes[key])}`)
+      .join(', ');
+    const parts = [
+      `name=${span.name}`,
+      `durationMs=${span.durationMs}`,
+      `status=${span.status}`,
+      `traceId=${span.traceId}`,
+      `spanId=${span.spanId}`,
+    ];
+    if (span.parentSpanId) parts.push(`parentSpanId=${span.parentSpanId}`);
+    if (span.errorMessage) parts.push(`error=${span.errorMessage}`);
+    parts.push(`attributes={${attrs}}`);
+    return `[span] ${parts.join(' ')}`;
+  }
+
+  /** SpanExporter implementation — prints the span via the configured logger. */
+  export(span: SpanData): void {
+    this.logger(this.format(span));
+  }
+
+  /** Allow passing the instance directly as a `SpanExporter` callback. */
+  readonly exporter: SpanExporter = (span: SpanData) => this.export(span);
+}

@@ -152,6 +152,95 @@ try {
 }
 ```
 
+## Shared Result Helpers (`@compliance-adapters/shared`)
+
+To reduce the drift between packages, `@compliance-adapters/shared` now exports a
+small, dependency-free `Result` type plus helpers:
+
+```typescript
+import { ok, err, isOk, isErr, type Result } from '@compliance-adapters/shared';
+
+type ParseError = { code: 'EMPTY' | 'MALFORMED'; message: string };
+
+function parseAddress(raw: string): Result<string, ParseError> {
+  if (raw.trim() === '') {
+    return err({ code: 'EMPTY', message: 'address is empty' });
+  }
+  if (!/^G[A-Z2-7]{55}$/.test(raw)) {
+    return err({ code: 'MALFORMED', message: 'address is not a valid Stellar account' });
+  }
+  return ok(raw);
+}
+
+const result = parseAddress(input);
+if (isErr(result)) {
+  console.error(result.error.code, result.error.message);
+} else {
+  console.log('Parsed:', result.value);
+}
+```
+
+**API**:
+- `Result<T, E>` — discriminated union of `{ ok: true; value: T }` and `{ ok: false; error: E }`
+- `ok(value)` — constructs a success result
+- `err(error)` — constructs a failure result
+- `isOk(result)` / `isErr(result)` — type guards that narrow the union
+
+**Conventions**:
+- Use `Result` for expected, recoverable failures (validation, provider responses,
+  parsing). Keep `throw` for programmer errors and truly unrecoverable conditions.
+- Choose a concrete, machine-readable error type (e.g. a `{ code, message }` object
+  or a package-specific error class) rather than `string` where consumers need to
+  branch on the failure kind.
+- Do not mix patterns within a single function: either return a `Result` or throw,
+  and document which in JSDoc.
+- `Result` is a plain object, so it serializes cleanly and is safe to log.
+
+**Recommended for new code**: prefer `Result` over ad-hoc `{ valid, error }` shapes
+or bare `boolean` returns for any new API surface in any package.
+
+### Pilot Adoption: sanctions-oracle
+
+`sanctions-oracle` is the pilot consumer. Its library-facing helpers that
+previously signalled failure by throwing or by returning loosely-typed objects now
+return `Result` values, so callers can branch on `isOk`/`isErr` without try/catch:
+
+```typescript
+import { isErr } from '@compliance-adapters/shared';
+import { syncSanctionsToDenylist } from '@compliance-adapters/sanctions-oracle';
+
+const result = await syncSanctionsToDenylist({ provider, addresses, writer });
+if (isErr(result)) {
+  console.error('Sync failed:', result.error);
+} else {
+  console.log(`Synced ${result.value.written.length} addresses`);
+}
+```
+
+Notes on the pilot:
+- The CLI entry point is unchanged: it still sets `process.exitCode` and logs to
+  stderr. It simply inspects the `Result` returned by the library layer.
+- `SanctionsProvider.checkAddress()` keeps its `{ flagged, source }` shape for now;
+  new provider methods should return `Result`.
+- Existing throwing call sites remain supported during the transition; the
+  `Result`-returning variants are additive.
+
+### Guidance for Other Packages
+
+- **sep10-auth**: `verifyChallenge` already returns a result-like object. New
+  functions should return `Result<T, E>`; migrating `VerifyResult` is a breaking
+  change and should be done in a major release with a deprecation window.
+- **horizon-listener**: keep the resilience-first model (log-and-continue for
+  transient errors, throw for fatal ones). `Result` is appropriate for pure
+  helpers such as event parsing or webhook payload validation, not for the
+  long-running `start()` loop.
+- **Migration checklist**:
+  1. Add `@compliance-adapters/shared` as a dependency.
+  2. Introduce `Result`-returning variants alongside existing APIs (additive first).
+  3. Update internal call sites and tests to use `isOk`/`isErr`.
+  4. Document the change in this file and in the package README.
+  5. Remove the legacy shape in the next major version.
+
 ## Alignment Recommendations
 
 ### Current State
@@ -223,6 +312,7 @@ two packages need a shared machine-readable error contract in practice.
 | sanctions-oracle (CLI) | Exit codes | No (caught) | Check `process.exitCode` |
 | sanctions-oracle (lib) | Throws | Yes | Use try/catch |
 | horizon-listener | Logs + throws | Context-dependent | Catch `start()`, log `onEvent` errors |
+| any package (new code) | `Result`/`ok`/`err` from `@compliance-adapters/shared` | No | Branch on `isOk`/`isErr` |
 
 ## Implementation Status
 
@@ -231,3 +321,6 @@ two packages need a shared machine-readable error contract in practice.
 - [x] Refactor CsvSanctionsProvider to not throw in constructor
 - [x] Add JSDoc documentation for throwing methods in horizon-listener
 - [x] Decide on common error types roadmap item (deferred; see decision note above)
+- [x] Add `Result`/`ok`/`err`/`isOk`/`isErr` helpers to `@compliance-adapters/shared`
+- [x] Adopt `Result` in sanctions-oracle as pilot
+- [ ] Migrate sep10-auth `VerifyResult` to `Result` (next major)
