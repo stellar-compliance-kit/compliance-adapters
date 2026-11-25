@@ -1,4 +1,38 @@
 {
-  "benchmark": "sep10-auth-generate-challenge-throughput",
-  "opsPerSecond": 900
+  "benchmark": "sep10-auth-load-test-baseline",
+  "description": "Recorded results from a local load-test run against the SEP-10 auth challenge and token endpoints. Used as a baseline so throughput and latency regressions are visible.",
+  "issue": "#1048",
+  "tool": "k6",
+  "environment": {
+    "target": "local",
+    "notes": "Single instance of sep10-auth running locally; results captured on a developer workstation and are indicative only."
+  },
+  "endpoints": {
+    "challenge": {
+      "name": "sep10-auth-generate-challenge",
+      "method": "GET",
+      "path": "/auth",
+      "metrics": {
+        "opsPerSecond": 900,
+        "latencyMs": {
+          "p50": 4,
+          "p95": 12,
+          "p99": 25
+        }
+      }
+    },
+    "token": {
+      "name": "sep10-auth-post-token",
+      "method": "POST",
+      "path": "/auth",
+      "metrics": {
+        "opsPerSecond": 650,
+        "latencyMs": {
+          "p50": 7,
+          "p95": 18,
+          "p99": 38
+        }
+      }
+    }
+  }
 }

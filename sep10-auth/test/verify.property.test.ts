@@ -10,6 +10,7 @@
 import * as fc from 'fast-check';
 import { Account, Keypair, Networks, Operation, TransactionBuilder } from '@stellar/stellar-sdk';
 import { verifyChallenge } from '../src/verify';
+import { generateChallenge } from '../src/challenge';
 
 const SEED = 0x5e910;
 const NUM_RUNS = 20;
@@ -157,6 +158,145 @@ describe('verifyChallenge - property-based mutation tests', () => {
     await fc.assert(
       fc.asyncProperty(distinctScenarioArb, async (s) => {
         const result = await verify(s, mutation);
+        expect(result.valid).toBe(false);
+        expect(result.address).toBe('');
+      }),
+      { numRuns: NUM_RUNS, seed: SEED },
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round-trip properties over generateChallenge -> sign -> verifyChallenge.
+// ---------------------------------------------------------------------------
+
+const MAX_TIMEOUT_SECONDS = 900;
+
+// "<domain> auth" must fit in a 64-byte manage_data name.
+const roundTripDomainArb = fc.domain().filter((d) => d.length > 0 && d.length <= 40);
+
+const memoArb: fc.Arbitrary<string | null> = fc.oneof(
+  fc.constant(null),
+  fc.integer({ min: 0, max: 2 ** 31 - 1 }).map((n) => String(n)),
+);
+
+const timeoutArb = fc.integer({ min: 1, max: MAX_TIMEOUT_SECONDS });
+
+interface RoundTripScenario {
+  server: Keypair;
+  client: Keypair;
+  stranger: Keypair;
+  homeDomain: string;
+  webAuthDomain: string;
+  memo: string | null;
+  timeout: number;
+}
+
+const roundTripScenarioArb: fc.Arbitrary<RoundTripScenario> = fc
+  .record({
+    server: keypairArb,
+    client: keypairArb,
+    stranger: keypairArb,
+    homeDomain: roundTripDomainArb,
+    webAuthDomain: roundTripDomainArb,
+    memo: memoArb,
+    timeout: timeoutArb,
+  })
+  .filter(
+    (s) =>
+      new Set([s.server.publicKey(), s.client.publicKey(), s.stranger.publicKey()]).size === 3,
+  );
+
+type RoundTripMutation =
+  | 'none'
+  | 'wrong-home-domain'
+  | 'wrong-web-auth-domain'
+  | 'wrong-memo'
+  | 'wrong-timeout'
+  | 'wrong-signature';
+
+/** Generates a challenge for the scenario, signs it, and optionally mutates it. */
+function buildRoundTrip(
+  s: RoundTripScenario,
+  mutation: RoundTripMutation,
+): { xdr: string; homeDomains: string; webAuthDomain: string } {
+  const { xdr } = generateChallenge({
+    serverAccountId: s.server.publicKey(),
+    clientAccountId: s.client.publicKey(),
+    networkPassphrase: Networks.TESTNET,
+    homeDomain: s.homeDomain,
+    webAuthDomain: s.webAuthDomain,
+    memo: s.memo,
+    timeout: s.timeout,
+  });
+
+  const tx = TransactionBuilder.fromXDR(xdr, Networks.TESTNET);
+
+  if (mutation === 'wrong-timeout') {
+    // Rebuild with a different timeout so the timebounds no longer match.
+    const { xdr: otherXdr } = generateChallenge({
+      serverAccountId: s.server.publicKey(),
+      clientAccountId: s.client.publicKey(),
+      networkPassphrase: Networks.TESTNET,
+      homeDomain: s.homeDomain,
+      webAuthDomain: s.webAuthDomain,
+      memo: s.memo,
+      timeout: s.timeout === MAX_TIMEOUT_SECONDS ? 1 : s.timeout + 1,
+    });
+    const other = TransactionBuilder.fromXDR(otherXdr, Networks.TESTNET);
+    other.sign(s.server);
+    other.sign(s.client);
+    return {
+      xdr: other.toXDR(),
+      homeDomains: s.homeDomain,
+      webAuthDomain: s.webAuthDomain,
+    };
+  }
+
+  tx.sign(mutation === 'wrong-signature' ? s.stranger : s.server);
+  tx.sign(s.client);
+
+  return {
+    xdr: tx.toXDR(),
+    homeDomains: mutation === 'wrong-home-domain' ? `x${s.homeDomain}` : s.homeDomain,
+    webAuthDomain: mutation === 'wrong-web-auth-domain' ? `x${s.webAuthDomain}` : s.webAuthDomain,
+  };
+}
+
+async function verifyRoundTrip(s: RoundTripScenario, mutation: RoundTripMutation) {
+  const { xdr, homeDomains, webAuthDomain } = buildRoundTrip(s, mutation);
+  return verifyChallenge(xdr, {
+    serverAccountId: s.server.publicKey(),
+    networkPassphrase: Networks.TESTNET,
+    homeDomains,
+    webAuthDomain,
+  });
+}
+
+describe('generateChallenge/verifyChallenge - round-trip property tests', () => {
+  it('accepts generated challenges across domains, memos and timeouts', async () => {
+    await fc.assert(
+      fc.asyncProperty(roundTripScenarioArb, async (s) => {
+        const result = await verifyRoundTrip(s, 'none');
+        expect(result.valid).toBe(true);
+        expect(result.address).toBe(s.client.publicKey());
+      }),
+      { numRuns: NUM_RUNS, seed: SEED },
+    );
+  });
+
+  const roundTripMutations: RoundTripMutation[] = [
+    'wrong-home-domain',
+    'wrong-web-auth-domain',
+    'wrong-memo',
+    'wrong-timeout',
+    'wrong-signature',
+  ];
+
+  it.each(roundTripMutations)('rejects the "%s" round-trip mutation', async (mutation) => {
+    await fc.assert(
+      fc.asyncProperty(roundTripScenarioArb, async (s) => {
+        const result = await verifyRoundTrip(s, mutation);
         expect(result.valid).toBe(false);
         expect(result.address).toBe('');
       }),

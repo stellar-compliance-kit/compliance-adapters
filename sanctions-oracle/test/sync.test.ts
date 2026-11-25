@@ -1085,3 +1085,115 @@ describe('parseArgs reconcile flags', () => {
     expect(parseArgs([]).reconcile).toBeUndefined();
   });
 });
+
+describe('issue #1047: sync report JSON schema', () => {
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const Ajv = require('ajv');
+  const path = require('path');
+
+  const schemaPath = path.resolve(__dirname, '..', 'sync-report.schema.json');
+  const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  const validate = ajv.compile(schema);
+
+  function expectValid(report: unknown): void {
+    const ok = validate(report);
+    if (!ok) {
+      throw new Error(`Expected report to be valid but got: ${ajv.errorsText(validate.errors)}`);
+    }
+    expect(ok).toBe(true);
+  }
+
+  it('schema file exists and is a valid JSON Schema document', () => {
+    expect(schema).toBeDefined();
+    expect(typeof schema).toBe('object');
+    expect(schema.$schema).toBeDefined();
+    expect(schema.type).toBe('object');
+  });
+
+  it('validates a dry-run report', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: true,
+    });
+
+    expectValid(result);
+  });
+
+  it('validates a live report', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: false,
+    });
+
+    expectValid(result);
+  });
+
+  it('validates a report containing failed addresses', async () => {
+    const provider = makeAlwaysFailingProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: true,
+      retry: { maxAttempts: 1, sleepFn: instantSleep },
+    });
+
+    expect(result.failed.length).toBeGreaterThan(0);
+    expectValid(result);
+  });
+
+  it('validates a reconcile report with cleared addresses', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, CLEAN_ADDRESS],
+      writer,
+      dryRun: false,
+      currentDenylist: [FLAGGED_ADDRESS],
+      reconcile: true,
+    });
+
+    expectValid(result);
+  });
+
+  it('validates a report that includes invalid addresses', async () => {
+    const provider = new MockSanctionsProvider();
+    const writer = makeFakeWriter();
+
+    const result = await syncSanctionsToDenylist({
+      provider,
+      addresses: [FLAGGED_ADDRESS, 'not-a-valid-address'],
+      writer,
+      dryRun: true,
+    });
+
+    expectValid(result);
+  });
+
+  it('rejects a deliberately malformed report', () => {
+    const malformed = {
+      dryRun: 'yes',
+      checked: -1,
+      flagged: 'not-an-array',
+      written: [],
+      failed: [],
+    };
+
+    expect(validate(malformed)).toBe(false);
+  });
+});

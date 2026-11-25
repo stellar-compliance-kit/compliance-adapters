@@ -1,5 +1,7 @@
 import type { EventSource, RawContractEvent } from '../src/eventSource';
 import { RpcEventSource } from '../src/eventSource';
+import { decodeScValToJson } from '../src/decode';
+import { xdr } from '@stellar/stellar-sdk';
 
 describe('EventSource implementations', () => {
   describe('mock EventSource with cursor handling', () => {
@@ -360,5 +362,217 @@ describe('RpcEventSource startLedger validation', () => {
       contractIds: ['CABC'],
     });
     await expect(source.getEvents(undefined)).rejects.toThrow(/requires `startLedger`/);
+  });
+});
+
+describe('decodeScValToJson fuzz harness (issue #1051)', () => {
+  // Deterministic PRNG so failures are reproducible.
+  function makeRng(seed: number): () => number {
+    let state = seed >>> 0;
+    return () => {
+      // xorshift32
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      state >>>= 0;
+      return state / 0x100000000;
+    };
+  }
+
+  function randomInt(rng: () => number, max: number): number {
+    return Math.floor(rng() * max);
+  }
+
+  function randomBigInt(rng: () => number, bits: number): bigint {
+    let value = 0n;
+    for (let i = 0; i < bits; i += 16) {
+      value = (value << 16n) | BigInt(randomInt(rng, 0x10000));
+    }
+    return value;
+  }
+
+  function randomBytes(rng: () => number, maxLen: number): Buffer {
+    const len = randomInt(rng, maxLen + 1);
+    const buf = Buffer.alloc(len);
+    for (let i = 0; i < len; i++) {
+      buf[i] = randomInt(rng, 256);
+    }
+    return buf;
+  }
+
+  function randomString(rng: () => number, maxLen: number): string {
+    const len = randomInt(rng, maxLen + 1);
+    let out = '';
+    for (let i = 0; i < len; i++) {
+      // printable ASCII to keep XDR string encoding valid
+      out += String.fromCharCode(32 + randomInt(rng, 95));
+    }
+    return out;
+  }
+
+  function randomScAddress(rng: () => number): xdr.ScAddress {
+    const kind = randomInt(rng, 3);
+    if (kind === 0) {
+      return xdr.ScAddress.scAddressTypeAccount(
+        xdr.PublicKey.publicKeyTypeEd25519(randomBytes(rng, 32).length === 32 ? randomBytes(rng, 32) : Buffer.alloc(32)),
+      );
+    }
+    if (kind === 1) {
+      return xdr.ScAddress.scAddressTypeContract(
+        xdr.ScContractId.fromXDR(randomBytes(rng, 32).length === 32 ? randomBytes(rng, 32) : Buffer.alloc(32)),
+      );
+    }
+    // muxed account with a 32-byte ed25519 key
+    return xdr.ScAddress.scAddressTypeMuxedAccount(
+      xdr.MuxedEd25519Account.fromXDR({
+        id: xdr.Uint64.fromString(randomBigInt(rng, 64).toString()),
+        ed25519: randomBytes(rng, 32).length === 32 ? randomBytes(rng, 32) : Buffer.alloc(32),
+      }),
+    );
+  }
+
+  function randomScVal(rng: () => number, depth: number): xdr.ScVal {
+    const maxKind = depth <= 0 ? 12 : 16;
+    const kind = randomInt(rng, maxKind + 1);
+    switch (kind) {
+      case 0:
+        return xdr.ScVal.scvBool(rng() < 0.5);
+      case 1:
+        return xdr.ScVal.scvVoid();
+      case 2:
+        return xdr.ScVal.scvI32(randomInt(rng, 0x100000000) - 0x80000000);
+      case 3:
+        return xdr.ScVal.scvI64(xdr.Int64.fromString(randomBigInt(rng, 63).toString()));
+      case 4:
+        return xdr.ScVal.scvU32(randomInt(rng, 0x100000000));
+      case 5:
+        return xdr.ScVal.scvU64(xdr.Uint64.fromString(randomBigInt(rng, 64).toString()));
+      case 6:
+        return xdr.ScVal.scvTimepoint(xdr.Uint64.fromString(randomBigInt(rng, 64).toString()));
+      case 7:
+        return xdr.ScVal.scvDuration(xdr.Uint64.fromString(randomBigInt(rng, 64).toString()));
+      case 8:
+        return xdr.ScVal.scvBytes(randomBytes(rng, 64));
+      case 9:
+        return xdr.ScVal.scvString(randomString(rng, 32));
+      case 10:
+        return xdr.ScVal.scvSymbol(randomString(rng, 16));
+      case 11:
+        return xdr.ScVal.scvAddress(randomScAddress(rng));
+      case 12:
+        return xdr.ScVal.scvI128(
+          xdr.Int128Parts.fromXDR({
+            hi: xdr.Int64.fromString(randomBigInt(rng, 63).toString()),
+            lo: xdr.Uint64.fromString(randomBigInt(rng, 64).toString()),
+          }),
+        );
+      case 13:
+        return xdr.ScVal.scvU128(
+          xdr.Uint128Parts.fromXDR({
+            hi: xdr.Uint64.fromString(randomBigInt(rng, 64).toString()),
+            lo: xdr.Uint64.fromString(randomBigInt(rng, 64).toString()),
+          }),
+        );
+      case 14: {
+        const len = randomInt(rng, 4);
+        const values: xdr.ScVal[] = [];
+        for (let i = 0; i < len; i++) {
+          values.push(randomScVal(rng, depth - 1));
+        }
+        return xdr.ScVal.scvVec(values);
+      }
+      case 15: {
+        const len = randomInt(rng, 4);
+        const entries: xdr.ScMapEntry[] = [];
+        for (let i = 0; i < len; i++) {
+          entries.push(
+            new xdr.ScMapEntry({
+              key: randomScVal(rng, depth - 1),
+              val: randomScVal(rng, depth - 1),
+            }),
+          );
+        }
+        return xdr.ScVal.scvMap(entries);
+      }
+      case 16: {
+        const len = randomInt(rng, 4);
+        const fields: xdr.ScMapEntry[] = [];
+        for (let i = 0; i < len; i++) {
+          fields.push(
+            new xdr.ScMapEntry({
+              key: xdr.ScVal.scvSymbol(`f${i}`),
+              val: randomScVal(rng, depth - 1),
+            }),
+          );
+        }
+        return xdr.ScVal.scvMap(fields);
+      }
+      default:
+        return xdr.ScVal.scvVoid();
+    }
+  }
+
+  function assertJsonSafe(value: unknown, path: string): void {
+    if (value === null) return;
+    const t = typeof value;
+    if (t === 'string' || t === 'boolean') return;
+    if (t === 'number') {
+      expect(Number.isFinite(value as number)).toBe(true);
+      return;
+    }
+    if (t === 'bigint') {
+      // bigints are not JSON-safe; the decoder must not return them raw
+      throw new Error(`bigint leaked at ${path}`);
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item, i) => assertJsonSafe(item, `${path}[${i}]`));
+      return;
+    }
+    if (t === 'object') {
+      for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+        assertJsonSafe(v, `${path}.${k}`);
+      }
+      return;
+    }
+    throw new Error(`unexpected type ${t} at ${path}`);
+  }
+
+  it('never throws and returns JSON-safe output for random valid ScVals', () => {
+    const rng = makeRng(0x1051);
+    const iterations = 500;
+    for (let i = 0; i < iterations; i++) {
+      const scVal = randomScVal(rng, 3);
+      // Round-trip through XDR to guarantee the value is valid encoded XDR.
+      const encoded = scVal.toXDR();
+      const decoded = xdr.ScVal.fromXDR(encoded);
+
+      let result: unknown;
+      expect(() => {
+        result = decodeScValToJson(decoded);
+      }).not.toThrow();
+
+      assertJsonSafe(result, `iteration ${i}`);
+      // Ensure the result can be serialized to JSON without throwing.
+      expect(() => JSON.stringify(result)).not.toThrow();
+    }
+  });
+
+  it('handles deeply nested vectors and maps without throwing', () => {
+    const rng = makeRng(0xbeef);
+    for (let i = 0; i < 50; i++) {
+      let value = randomScVal(rng, 0);
+      const depth = 1 + randomInt(rng, 5);
+      for (let d = 0; d < depth; d++) {
+        value = rng() < 0.5 ? xdr.ScVal.scvVec([value]) : xdr.ScVal.scvMap([
+          new xdr.ScMapEntry({ key: xdr.ScVal.scvSymbol(`k${d}`), val: value }),
+        ]);
+      }
+      const decoded = xdr.ScVal.fromXDR(value.toXDR());
+      let result: unknown;
+      expect(() => {
+        result = decodeScValToJson(decoded);
+      }).not.toThrow();
+      assertJsonSafe(result, `nested ${i}`);
+    }
   });
 });

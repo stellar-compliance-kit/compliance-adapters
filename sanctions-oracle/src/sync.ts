@@ -421,7 +421,22 @@ export interface SyncResult {
   needsReview?: ReviewAddress[];
   /** Dry-run only: estimated fee for the pending writes (see {@link SyncOptions.feeEstimator}). */
   feeEstimate?: FeeEstimate;
+  /**
+   * Set when the run stopped early because `--max-duration` elapsed: no new
+   * checks were started, in-flight checks finished, and results were saved.
+   */
+  deadlineExceeded?: boolean;
 }
+
+/**
+ * JSON Schema (draft 2020-12) for the {@link SyncResult} report emitted by
+ * {@link syncSanctionsToDenylist} (and printed by `--json`). Kept in sync with
+ * the TypeScript type by `sync-report.schema.test.ts`.
+ *
+ * The canonical document lives at `sanctions-oracle/sync-report.schema.json`.
+ */
+export const SYNC_REPORT_SCHEMA_ID =
+  'https://github.com/stellar-compliance-kit/sanctions-oracle/sync-report.schema.json';
 
 interface FlaggedAddressWithSource {
   address: string;

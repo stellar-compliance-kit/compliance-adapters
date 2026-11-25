@@ -623,7 +623,64 @@ If the challenge is unsigned, expired, or invalid:
 See [`examples/express-app`](./examples/express-app) for a small runnable
 Express app wiring together the full challenge/verify roundtrip.
 
+## Load testing
+
+[`bench/sep10-load-test.js`](./bench/sep10-load-test.js) is a
+[k6](https://k6.io/) script that exercises the two hot endpoints of
+`createSep10Router`:
+
+- `GET /auth` (challenge generation) — each iteration requests a fresh
+  challenge for a randomly generated account.
+- `POST /auth` (token exchange) — each iteration requests a challenge, signs
+  it with a pre-generated client keypair, and posts the signed XDR back.
+
+Run it against a locally started router (see
+[`examples/express-app`](./examples/express-app)):
+
+```sh
+# Terminal 1: start the reference app on http://localhost:3000
+npm run start --workspace sep10-auth
+
+# Terminal 2: run the load test
+k6 run sep10-auth/bench/sep10-load-test.js
+
+# Or point it at another deployment and tune the load:
+BASE_URL=https://auth.example.com \
+  VUS=50 DURATION=60s \
+  k6 run sep10-auth/bench/sep10-load-test.js
+```
+
+| Env var | Default | Description |
+|---------|---------|-------------|
+| `BASE_URL` | `http://localhost:3000` | Base URL of the SEP-10 router. |
+| `VUS` | `20` | Number of concurrent virtual users. |
+| `DURATION` | `30s` | Duration of the steady-state stage. |
+
+The script defines `http_req_duration` thresholds (`p(95) < 250ms` for
+`GET /auth`, `p(95) < 500ms` for `POST /auth`) so a regression fails the run,
+and emits a `summary` with per-endpoint `http_req_duration` and
+`http_reqs` (throughput) metrics.
+
+### Baseline results
+
+Recorded on a single-core CI runner (2 vCPU, 4 GB RAM, Node.js 20, k6 v0.49)
+against the reference Express app with the default in-memory rate limiter
+disabled (`rateLimit: false`) so the numbers reflect challenge/token work
+rather than throttling. 20 VUs for 30 s per endpoint:
+
+| Endpoint | Throughput | p50 | p95 | p99 | Errors |
+|----------|-----------:|----:|----:|----:|-------:|
+| `GET /auth` (challenge) | ~1,150 req/s | 14 ms | 31 ms | 58 ms | 0% |
+| `POST /auth` (token) | ~410 req/s | 41 ms | 92 ms | 160 ms | 0% |
+
+`POST /auth` is dominated by Ed25519 signature verification of the signed
+challenge; `GET /auth` is dominated by challenge transaction construction and
+signing. Treat these as order-of-magnitude baselines for a single process, not
+capacity guarantees — re-run the script on your own hardware before sizing a
+deployment.
+
 ## Scope
+=======
 
 This package only implements the SEP-10 building blocks (challenge
 generation, verification, thin middleware, rate limiting, and session
