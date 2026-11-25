@@ -54,11 +54,36 @@ function defaultKeyGenerator(req: import('express').Request): string {
   return req.ip ?? req.socket.remoteAddress ?? 'unknown';
 }
 
+/**
+ * Default in-memory sliding-window store used by {@link rateLimiter}.
+ *
+ * Entries are pruned lazily on access and periodically by an unref'd sweep
+ * timer, so the store never keeps the Node.js process alive on its own.
+ *
+ * @example
+ * ```ts
+ * import { InMemoryRateLimitStore, rateLimiter } from 'sep10-auth';
+ *
+ * const store = new InMemoryRateLimitStore();
+ * app.use(rateLimiter({ store, windowMs: 60_000, maxRequests: 100 }));
+ * ```
+ */
 export class InMemoryRateLimitStore implements RateLimitStore {
   private readonly store = new Map<string, RateLimitEntry>();
   private sweepTimer: ReturnType<typeof setInterval> | undefined;
 
+  /**
+   * Records a hit for `key` and reports whether the request is allowed.
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRateLimitStore();
+   * const decision = store.consume('127.0.0.1', Date.now(), 60_000, 100);
+   * console.log(decision.allowed, decision.count);
+   * ```
+   */
   consume(
+======= 
     key: string,
     now: number,
     windowMs: number,
@@ -142,6 +167,20 @@ function validatePositiveInteger(value: number, optionName: string): void {
  *
  * // 10 requests per 30 seconds
  * app.use('/api/challenge', rateLimiter({ windowMs: 30_000, maxRequests: 10 }));
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Exempt trusted health checkers from rate limiting
+ * import { rateLimiter } from 'sep10-auth';
+ *
+ * app.use(
+ *   rateLimiter({
+ *     windowMs: 60_000,
+ *     maxRequests: 100,
+ *     skip: (req) => req.path === '/health',
+ *   }),
+ * );
  * ```
  */
 export function rateLimiter(options: RateLimiterOptions = {}): RequestHandler {

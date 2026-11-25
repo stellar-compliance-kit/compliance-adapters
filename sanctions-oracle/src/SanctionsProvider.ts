@@ -41,6 +41,36 @@ export interface CheckResult {
   score?: number;
 }
 
+/**
+ * Implement this interface to plug an external sanctions/watchlist data
+ * source into the denylist-gate sync flow (see `sync.ts`).
+ *
+ * @example
+ * ```ts
+ * import type { SanctionsProvider, CheckResult } from 'sanctions-oracle';
+ *
+ * const provider: SanctionsProvider = {
+ *   async checkAddress(address: string): Promise<CheckResult> {
+ *     const flagged = await isOnWatchlist(address);
+ *     return { flagged, source: 'my-watchlist', score: flagged ? 1 : 0 };
+ *   },
+ * };
+ *
+ * const result = await provider.checkAddress('GABC...');
+ * console.log(result.flagged, result.source);
+ * ```
+ */
 export interface SanctionsProvider {
+  /**
+   * Check a single Stellar address against the provider's watchlist.
+   *
+   * @example
+   * ```ts
+   * const result = await provider.checkAddress('GABC...');
+   * if (result.flagged) {
+   *   console.log(`flagged by ${result.source} (score: ${result.score ?? 'n/a'})`);
+   * }
+   * ```
+   */
   checkAddress(address: string): Promise<CheckResult>;
 }

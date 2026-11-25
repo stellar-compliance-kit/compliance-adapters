@@ -41,6 +41,8 @@
     "lint": "eslint sep10-auth/src sanctions-oracle/src horizon-listener/src tracing-types/src examples/full-stack-demo/server.js --ext .ts,.js",
     "check:license": "node scripts/check-license-headers.js",
     "check:changelog": "node scripts/check-root-changelog.js",
+    "check:deps": "depcruise --config .dependency-cruiser.js backoff logger shared tracing-types metrics tracing sep10-auth sanctions-oracle horizon-listener",
+    "test:types": "tsd",
     "format": "prettier --check .",
     "format:check": "prettier --check .",
     "format:write": "prettier --write .",
@@ -57,11 +59,13 @@
     "@types/node": "^20.14.0",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
+    "dependency-cruiser": "^16.3.10",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "jest": "^29.7.0",
     "prettier": "^3.3.3",
     "ts-jest": "^29.2.4",
+    "tsd": "^0.31.1",
     "typescript": "^5.5.4"
   },
   "license": "MIT"

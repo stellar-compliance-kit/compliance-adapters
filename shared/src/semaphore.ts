@@ -3,6 +3,26 @@
  * SPDX-License-Identifier: MIT
  */
 
+/**
+ * Error thrown when a semaphore acquisition exceeds its configured timeout.
+ *
+ * @example
+ * ```ts
+ * import { createSemaphore, SemaphoreTimeoutError } from './semaphore';
+ *
+ * const sem = createSemaphore(1);
+ * const release = await sem.acquire();
+ * try {
+ *   await sem.acquire({ timeoutMs: 10 });
+ * } catch (err) {
+ *   if (err instanceof SemaphoreTimeoutError) {
+ *     console.log(`timed out after ${err.timeoutMs}ms`);
+ *   }
+ * } finally {
+ *   release();
+ * }
+ * ```
+ */
 export class SemaphoreTimeoutError extends Error {
   readonly timeoutMs: number;
 
@@ -24,6 +44,22 @@ export interface Semaphore {
 
 /**
  * Creates a FIFO semaphore for concurrency control.
+ *
+ * @param limit - Maximum number of concurrent holders, or `Infinity` for no limit.
+ * @returns A {@link Semaphore} whose `acquire` resolves to an idempotent release function.
+ *
+ * @example
+ * ```ts
+ * import { createSemaphore } from './semaphore';
+ *
+ * const sem = createSemaphore(2);
+ * const release = await sem.acquire({ timeoutMs: 1000 });
+ * try {
+ *   await doWork();
+ * } finally {
+ *   release();
+ * }
+ * ```
  */
 export function createSemaphore(limit: number): Semaphore {
   if (limit !== Infinity && (!Number.isFinite(limit) || limit <= 0)) {

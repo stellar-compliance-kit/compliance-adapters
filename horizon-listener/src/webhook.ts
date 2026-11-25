@@ -104,6 +104,20 @@ export interface HttpWebhookSenderOptions {
  * against one or more secrets. Returns true when any signature in the header
  * matches any secret, so receivers can accept both old and new secrets
  * during a rotation window. Does not check timestamp freshness.
+ *
+ * @example
+ * ```ts
+ * import { verifyWebhookSignature } from 'horizon-listener';
+ *
+ * // Inside your HTTP handler, using the raw request body:
+ * const ok = verifyWebhookSignature(
+ *   rawBody,
+ *   req.headers['x-timestamp'] as string,
+ *   req.headers['x-signature'] as string,
+ *   process.env.WEBHOOK_SECRET!,
+ * );
+ * if (!ok) throw new Error('invalid webhook signature');
+ * ```
  */
 export function verifyWebhookSignature(
   rawBody: string | Buffer,
@@ -127,6 +141,25 @@ interface PendingDelivery {
   reject: (err: Error) => void;
 }
 
+/**
+ * Sends contract events to an HTTP endpoint, with optional HMAC signing,
+ * retries with exponential backoff, batching, metrics and tracing.
+ *
+ * @example
+ * ```ts
+ * import { HttpWebhookSender } from 'horizon-listener';
+ *
+ * const sender = new HttpWebhookSender({
+ *   url: 'https://example.com/webhooks/events',
+ *   signingSecret: process.env.WEBHOOK_SECRET,
+ *   maxRetries: 3,
+ * });
+ *
+ * await sender.send(event);
+ * // On shutdown, flush any partially-filled batch:
+ * await sender.flush();
+ * ```
+ */
 export class HttpWebhookSender implements WebhookSender {
   private readonly url: string;
   private readonly signingSecrets: string[];
@@ -181,6 +214,12 @@ export class HttpWebhookSender implements WebhookSender {
    * Sends an event to the configured webhook URL.
    * @throws {Error} When the HTTP response is not OK (status >= 400).
    * Consumers should handle this error with retry logic or fallback behavior.
+   *
+   * @example
+   * ```ts
+   * const sender = new HttpWebhookSender({ url: 'https://example.com/hook' });
+   * await sender.send({ id: 'evt-1', ledger: 123, contractId: 'C...', topics: [], value: '' });
+   * ```
    */
   async send(event: RawContractEvent): Promise<void> {
     if (this.batchSize <= 1) {
@@ -199,6 +238,13 @@ export class HttpWebhookSender implements WebhookSender {
   /**
    * Delivers any partially-filled batch immediately. Call on shutdown so
    * buffered events are not lost. No-op when batching is disabled.
+   *
+   * @example
+   * ```ts
+   * const sender = new HttpWebhookSender({ url: 'https://example.com/hook', batchSize: 10 });
+   * await sender.send(event); // buffered
+   * await sender.flush();    // delivers the partial batch now
+   * ```
    */
   async flush(): Promise<void> {
     if (this.batchTimer) {
@@ -221,7 +267,17 @@ export class HttpWebhookSender implements WebhookSender {
     }
   }
 
-  /** Flushes any partial batch. Alias for {@link flush} for shutdown hooks. */
+  /**
+   * Flushes any partial batch. Alias for {@link flush} for shutdown hooks.
+   *
+   * @example
+   * ```ts
+   * process.on('SIGTERM', async () => {
+   *   await sender.stop();
+   *   process.exit(0);
+   * });
+   * ```
+   */
   stop(): Promise<void> {
     return this.flush();
   }

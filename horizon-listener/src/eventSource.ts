@@ -58,7 +58,36 @@ export interface RawContractEvent {
   value: unknown;
 }
 
+/**
+ * The seam the listener pipeline depends on for fetching contract events.
+ * Implement this interface to plug in a custom transport (e.g. a mock in tests
+ * or a caching proxy) instead of {@link RpcEventSource}.
+ *
+ * @example
+ * ```ts
+ * const source: EventSource = {
+ *   async getEvents(cursor) {
+ *     return { events: [], nextCursor: cursor ?? '' };
+ *   },
+ * };
+ * const { events, nextCursor } = await source.getEvents(undefined);
+ * ```
+ */
 export interface EventSource {
+  /**
+   * Fetches the next page of contract events.
+   *
+   * @param cursor - Opaque cursor from a previous call's `nextCursor`, or
+   *   `undefined` to start from the configured `startLedger`.
+   * @returns The page of events, the cursor to resume from, and optionally the
+   *   latest ledger known to the RPC node.
+   *
+   * @example
+   * ```ts
+   * const page = await source.getEvents(undefined);
+   * const next = await source.getEvents(page.nextCursor);
+   * ```
+   */
   getEvents(
     cursor: string | undefined,
   ): Promise<{ events: RawContractEvent[]; nextCursor: string; latestLedger?: number }>;
@@ -117,6 +146,35 @@ const EVENT_TYPES: readonly RpcEventType[] = ['contract', 'system', 'diagnostic'
 type GetEventsRequest = Parameters<rpc.Server['getEvents']>[0];
 type GetEventsResponse = Awaited<ReturnType<rpc.Server['getEvents']>>;
 
+/**
+ * {@link EventSource} implementation backed by the Soroban RPC `getEvents`
+ * endpoint, with optional multi-endpoint failover, request timeouts, and
+ * native ScVal decoding.
+ *
+ * @example
+ * ```ts
+ * const source = new RpcEventSource({
+ *   rpcUrl: 'https://soroban-testnet.stellar.org',
+ *   networkPassphrase: Networks.TESTNET,
+ *   contractIds: ['CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM'],
+ *   startLedger: 1000,
+ * });
+ * const { events, nextCursor } = await source.getEvents(undefined);
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Failover across two endpoints with native decoding.
+ * const source = new RpcEventSource({
+ *   rpcUrls: ['https://primary.example.org', 'https://fallback.example.org'],
+ *   failoverAfter: 3,
+ *   networkPassphrase: Networks.TESTNET,
+ *   contractIds: ['CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM'],
+ *   startLedger: 1000,
+ *   decode: 'native',
+ * });
+ * ```
+ */
 export class RpcEventSource implements EventSource {
   private readonly options: RpcEventSourceOptions;
   private readonly rpcUrls: string[];
@@ -166,7 +224,23 @@ export class RpcEventSource implements EventSource {
     this.options = options;
   }
 
-  /** Builds the `filters` array sent with every getEvents request. */
+  /**
+   * Builds the `filters` array sent with every getEvents request.
+   *
+   * @returns A single-element array describing the contract IDs, event type,
+   *   and (if configured) topic filters.
+   *
+   * @example
+   * ```ts
+   * const source = new RpcEventSource({
+   *   rpcUrl: 'https://soroban-testnet.stellar.org',
+   *   networkPassphrase: Networks.TESTNET,
+   *   contractIds: ['CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM'],
+   * });
+   * const filters = source.buildFilters();
+   * // => [{ contractIds: ['C…'], type: 'contract' }]
+   * ```
+   */
   buildFilters(): Record<string, unknown>[] {
     const eventType = this.options.eventType ?? 'contract';
     const filter: Record<string, unknown> = { contractIds: this.options.contractIds };
@@ -195,6 +269,30 @@ export class RpcEventSource implements EventSource {
     this.options.onFailover?.(from, this.activeRpcUrl);
   }
 
+  /**
+   * Fetches the next page of contract events from the active RPC endpoint,
+   * rotating to the next URL on repeated failures.
+   *
+   * @param cursor - Cursor from a previous `nextCursor`, or `undefined` for the
+   *   first call (requires `startLedger` to have been configured).
+   * @returns The decoded events, the cursor to resume from, and optionally the
+   *   latest ledger known to the RPC node.
+   * @throws If called without a cursor before `startLedger` was configured, or
+   *   if the request exceeds the configured `timeoutMs`.
+   *
+   * @example
+   * ```ts
+   * const source = new RpcEventSource({
+   *   rpcUrl: 'https://soroban-testnet.stellar.org',
+   *   networkPassphrase: Networks.TESTNET,
+   *   contractIds: ['CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD2KM'],
+   *   startLedger: 1000,
+   * });
+   * let cursor: string | undefined;
+   * const page = await source.getEvents(cursor);
+   * cursor = page.nextCursor;
+   * ```
+   */
   async getEvents(
     cursor: string | undefined,
   ): Promise<{ events: RawContractEvent[]; nextCursor: string; latestLedger?: number }> {

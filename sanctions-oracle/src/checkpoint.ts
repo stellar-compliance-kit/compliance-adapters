@@ -11,6 +11,13 @@ import type { Logger } from '@compliance-adapters/logger';
  *
  * `load` returns the addresses completed by an earlier run. Implementations
  * should make `markComplete` durable before it resolves.
+ *
+ * @example
+ * ```ts
+ * const store: CheckpointStore = new InMemoryCheckpointStore();
+ * await store.markComplete('GABC...');
+ * const done = await store.load(); // ['GABC...']
+ * ```
  */
 export interface CheckpointStore {
   load(): string[] | Promise<string[]>;
@@ -21,12 +28,27 @@ export interface CheckpointStore {
 /**
  * Legacy checkpoint contract retained for stores written against earlier
  * versions. New stores should implement {@link CheckpointStore}.
+ *
+ * @example
+ * ```ts
+ * const store: SyncCheckpointStore = new InMemoryCheckpointStore();
+ * store.markComplete('GABC...');
+ * store.isComplete('GABC...'); // true
+ * ```
  */
 export interface SyncCheckpointStore {
   isComplete(address: string): boolean | Promise<boolean>;
   markComplete(address: string): void | Promise<void>;
 }
 
+/**
+ * Options for {@link FileCheckpointStore}.
+ *
+ * @example
+ * ```ts
+ * const options: FileCheckpointStoreOptions = { spaces: 0 };
+ * ```
+ */
 export interface FileCheckpointStoreOptions {
   /** Optional JSON indentation for the checkpoint file. Defaults to 2. */
   spaces?: number;
@@ -38,6 +60,14 @@ export interface FileCheckpointStoreOptions {
  * A missing file is treated as an empty checkpoint. Writes use a temporary
  * file followed by a rename so a process restart cannot leave a partial JSON
  * document behind.
+ *
+ * @example
+ * ```ts
+ * const store = new FileCheckpointStore('./checkpoint.json');
+ * await store.markComplete('GABC...');
+ * console.log(await store.load()); // ['GABC...']
+ * await store.reset();
+ * ```
  */
 export class FileCheckpointStore implements CheckpointStore {
   private readonly spaces: number;
@@ -99,6 +129,15 @@ export class FileCheckpointStore implements CheckpointStore {
  * Minimal Redis client surface required by {@link RedisCheckpointStore}.
  * Both ioredis and node-redis can be adapted to this shape without adding a
  * Redis client dependency to sanctions-oracle.
+ *
+ * @example
+ * ```ts
+ * const redis: CheckpointRedisLike = {
+ *   get: (key) => client.get(key),
+ *   set: (key, value) => client.set(key, value),
+ *   del: (key) => client.del(key),
+ * };
+ * ```
  */
 export interface CheckpointRedisLike {
   get(key: string): Promise<string | null>;
@@ -106,6 +145,14 @@ export interface CheckpointRedisLike {
   del(key: string): Promise<unknown>;
 }
 
+/**
+ * Options for {@link RedisCheckpointStore}.
+ *
+ * @example
+ * ```ts
+ * const options: RedisCheckpointStoreOptions = { key: 'my-app:checkpoint' };
+ * ```
+ */
 export interface RedisCheckpointStoreOptions {
   /** Redis key used for the serialized set of completed addresses. */
   key?: string;
@@ -113,6 +160,13 @@ export interface RedisCheckpointStoreOptions {
 
 /**
  * Redis-backed implementation of {@link CheckpointStore}.
+ *
+ * @example
+ * ```ts
+ * const store = new RedisCheckpointStore(redis, { key: 'my-app:checkpoint' });
+ * await store.markComplete('GABC...');
+ * console.log(await store.load()); // ['GABC...']
+ * ```
  */
 export class RedisCheckpointStore implements CheckpointStore {
   private readonly key: string;
@@ -154,6 +208,14 @@ export class RedisCheckpointStore implements CheckpointStore {
 
 /**
  * In-memory reference implementation of {@link CheckpointStore}.
+ *
+ * @example
+ * ```ts
+ * const store = new InMemoryCheckpointStore(['GABC...']);
+ * store.markComplete('GDEF...');
+ * console.log(store.snapshot()); // ['GABC...', 'GDEF...']
+ * store.reset();
+ * ```
  */
 export class InMemoryCheckpointStore implements CheckpointStore, SyncCheckpointStore {
   private readonly completed: Set<string>;
@@ -192,6 +254,15 @@ export class InMemoryCheckpointStore implements CheckpointStore, SyncCheckpointS
  * existing file can't be parsed anyway (e.g. written by an older, non-atomic
  * version), it is moved aside to `<path>.corrupt-<timestamp>`, a warning is
  * logged, and the store starts fresh instead of crashing the sync.
+ *
+ * @example
+ * ```ts
+ * const store = new FileCheckpointStore('./checkpoint.json', logger);
+ * if (!store.isComplete('GABC...')) {
+ *   store.markComplete('GABC...');
+ * }
+ * console.log(store.snapshot()); // ['GABC...']
+ * ```
  */
 export class FileCheckpointStore implements SyncCheckpointStore {
   private readonly completed: Set<string>;

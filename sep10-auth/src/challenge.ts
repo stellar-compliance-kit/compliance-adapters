@@ -7,6 +7,23 @@ import { Keypair, Networks, StrKey, WebAuth } from '@stellar/stellar-sdk';
 import { type Logger, noopLogger } from '@compliance-adapters/logger';
 import { isValidStellarAddress } from '@compliance-adapters/shared';
 
+/**
+ * Thrown by {@link generateChallenge} when the client account is neither a
+ * valid `G...` account nor a valid muxed `M...` account.
+ *
+ * @example
+ * ```ts
+ * import { InvalidClientAddressError } from '@compliance-adapters/sep10-auth';
+ *
+ * try {
+ *   generateChallenge('not-an-address', serverKeypair);
+ * } catch (err) {
+ *   if (err instanceof InvalidClientAddressError) {
+ *     // respond with HTTP 400
+ *   }
+ * }
+ * ```
+ */
 export class InvalidClientAddressError extends Error {
   constructor(address: string) {
     super(`Invalid client address: ${address}`);
@@ -14,6 +31,23 @@ export class InvalidClientAddressError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link generateChallenge} when `memo` is not a numeric string
+ * representing a 64-bit unsigned integer.
+ *
+ * @example
+ * ```ts
+ * import { InvalidMemoError } from '@compliance-adapters/sep10-auth';
+ *
+ * try {
+ *   generateChallenge(clientAddress, serverKeypair, { memo: 'abc' });
+ * } catch (err) {
+ *   if (err instanceof InvalidMemoError) {
+ *     // respond with HTTP 400
+ *   }
+ * }
+ * ```
+ */
 export class InvalidMemoError extends Error {
   constructor(memo: string) {
     super(`Invalid memo: "${memo}" must be a numeric string representing a 64-bit unsigned integer`);
@@ -21,6 +55,23 @@ export class InvalidMemoError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link generateChallenge} when a `memo` is supplied together with a
+ * muxed (`M...`) client account.
+ *
+ * @example
+ * ```ts
+ * import { MemoWithMuxedAccountError } from '@compliance-adapters/sep10-auth';
+ *
+ * try {
+ *   generateChallenge('M...', serverKeypair, { memo: '123' });
+ * } catch (err) {
+ *   if (err instanceof MemoWithMuxedAccountError) {
+ *     // drop the memo; the mux id already identifies the sub-user
+ *   }
+ * }
+ * ```
+ */
 export class MemoWithMuxedAccountError extends Error {
   constructor() {
     super(
@@ -30,6 +81,23 @@ export class MemoWithMuxedAccountError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link generateChallenge} when `timeoutSec` is not a finite number
+ * in the range `(0, MAX_TIMEOUT_SECONDS]`.
+ *
+ * @example
+ * ```ts
+ * import { InvalidTimeoutError } from '@compliance-adapters/sep10-auth';
+ *
+ * try {
+ *   generateChallenge(clientAddress, serverKeypair, { timeoutSec: 0 });
+ * } catch (err) {
+ *   if (err instanceof InvalidTimeoutError) {
+ *     // respond with HTTP 400
+ *   }
+ * }
+ * ```
+ */
 export class InvalidTimeoutError extends Error {
   constructor(value: number) {
     super(
@@ -39,6 +107,23 @@ export class InvalidTimeoutError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link assertBareDomain} (and therefore {@link generateChallenge})
+ * when a domain value contains a scheme, path, or whitespace.
+ *
+ * @example
+ * ```ts
+ * import { InvalidDomainError, assertBareDomain } from '@compliance-adapters/sep10-auth';
+ *
+ * try {
+ *   assertBareDomain('homeDomain', 'https://example.com/auth');
+ * } catch (err) {
+ *   if (err instanceof InvalidDomainError) {
+ *     // use "example.com" instead
+ *   }
+ * }
+ * ```
+ */
 export class InvalidDomainError extends Error {
   constructor(name: string, value: string) {
     super(
@@ -48,6 +133,23 @@ export class InvalidDomainError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link resolveHomeDomain} when the requested `home_domain` is not
+ * among the configured domains.
+ *
+ * @example
+ * ```ts
+ * import { UnknownHomeDomainError, resolveHomeDomain } from '@compliance-adapters/sep10-auth';
+ *
+ * try {
+ *   resolveHomeDomain('evil.example', ['auth.example.com']);
+ * } catch (err) {
+ *   if (err instanceof UnknownHomeDomainError) {
+ *     // respond with HTTP 400
+ *   }
+ * }
+ * ```
+ */
 export class UnknownHomeDomainError extends Error {
   constructor(requested: string, configured: string[]) {
     super(
@@ -57,6 +159,25 @@ export class UnknownHomeDomainError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link generateChallenge} when the supplied server keypair has no
+ * secret key and therefore cannot sign the challenge transaction.
+ *
+ * @example
+ * ```ts
+ * import { Keypair } from '@stellar/stellar-sdk';
+ * import { ServerKeypairCannotSignError, generateChallenge } from '@compliance-adapters/sep10-auth';
+ *
+ * const publicOnly = Keypair.fromPublicKey(serverPublicKey);
+ * try {
+ *   generateChallenge(clientAddress, publicOnly);
+ * } catch (err) {
+ *   if (err instanceof ServerKeypairCannotSignError) {
+ *     // configure a keypair created with Keypair.fromSecret(...)
+ *   }
+ * }
+ * ```
+ */
 export class ServerKeypairCannotSignError extends Error {
   constructor() {
     super(
@@ -75,6 +196,14 @@ export const MAX_TIMEOUT_SECONDS = 3600;
  * Throws {@link InvalidDomainError} when `value` is not a bare domain, i.e. it
  * contains a URL scheme (`://`), a `/`, or whitespace, as SEP-10 requires for
  * `home_domain` and `web_auth_domain`.
+ *
+ * @example
+ * ```ts
+ * import { assertBareDomain } from '@compliance-adapters/sep10-auth';
+ *
+ * assertBareDomain('homeDomain', 'auth.example.com'); // ok
+ * assertBareDomain('homeDomain', 'https://auth.example.com'); // throws InvalidDomainError
+ * ```
  */
 export function assertBareDomain(name: string, value: string): void {
   if (/:\/\/|\/|\s/.test(value)) {
@@ -89,6 +218,16 @@ export function assertBareDomain(name: string, value: string): void {
  *
  * @throws {@link UnknownHomeDomainError} when `requested` is not configured —
  *   callers should respond with HTTP 400, as SEP-10 recommends.
+ *
+ * @example
+ * ```ts
+ * import { resolveHomeDomain } from '@compliance-adapters/sep10-auth';
+ *
+ * const configured = ['auth.example.com', 'auth.example.org'];
+ * resolveHomeDomain(undefined, configured); // 'auth.example.com'
+ * resolveHomeDomain('auth.example.org', configured); // 'auth.example.org'
+ * resolveHomeDomain('evil.example', configured); // throws UnknownHomeDomainError
+ * ```
  */
 export function resolveHomeDomain(
   requested: string | null | undefined,
@@ -162,6 +301,26 @@ function isValidClientAddress(address: string): boolean {
  * Builds a SEP-10 challenge. `clientAddress` may be a `G...` account or a muxed
  * `M...` account (SEP-10 v3); a muxed account cannot be combined with `memo`
  * ({@link MemoWithMuxedAccountError}).
+ *
+ * @example
+ * ```ts
+ * import { Keypair, Networks } from '@stellar/stellar-sdk';
+ * import { generateChallenge } from '@compliance-adapters/sep10-auth';
+ *
+ * const serverKeypair = Keypair.fromSecret(process.env.SEP10_SERVER_SECRET!);
+ * const { transactionXDR, networkPassphrase, expiresAt } = generateChallenge(
+ *   'GCLIENT...',
+ *   serverKeypair,
+ *   {
+ *     homeDomain: 'auth.example.com',
+ *     webAuthDomain: 'auth.example.com',
+ *     networkPassphrase: Networks.PUBLIC,
+ *     timeoutSec: 300,
+ *   },
+ * );
+ *
+ * // Send transactionXDR to the client for signing.
+ * ```
  */
 // Takes the server's Keypair (not just its public address) because building
 // and signing the SEP-10 challenge transaction requires the server's secret key.

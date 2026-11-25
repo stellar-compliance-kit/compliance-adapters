@@ -43,8 +43,22 @@ export type MetricsRegistryOptions = Omit<
  *
  * Pass an instance to `SyncOptions.metrics` to enable recording.  Omit it to
  * use the built-in no-op registry — there is zero overhead.
+ *
+ * @example
+ * ```ts
+ * import { MetricsRegistry } from 'sanctions-oracle';
+ *
+ * const metrics = new MetricsRegistry({ prefix: 'my_oracle' });
+ * // Pass `metrics` to SyncOptions.metrics to start recording observations.
+ * ```
  */
 export class MetricsRegistry extends GenericMetricsRegistry<SanctionsPhase> {
+  /**
+   * @example
+   * ```ts
+   * const metrics = new MetricsRegistry({ prefix: 'custom_prefix' });
+   * ```
+   */
   constructor(options: MetricsRegistryOptions = {}) {
     super({ ...options, prefix: options.prefix ?? 'sanctions_oracle', phases: PHASES });
   }
@@ -53,6 +67,14 @@ export class MetricsRegistry extends GenericMetricsRegistry<SanctionsPhase> {
 /**
  * A no-op registry that discards all observations.
  * Used as the default so callers that don't provide a registry pay no cost.
+ *
+ * @example
+ * ```ts
+ * import { NoopMetricsRegistry } from 'sanctions-oracle';
+ *
+ * const metrics = new NoopMetricsRegistry();
+ * // Safe to pass anywhere a MetricsRegistry is accepted; records nothing.
+ * ```
  */
 export class NoopMetricsRegistry extends GenericNoopMetricsRegistry<SanctionsPhase> {}
 

@@ -268,6 +268,26 @@ function classifyError(err: unknown): VerifyErrorCode {
   return 'UNKNOWN';
 }
 
+/**
+ * Verifies a signed SEP-10 challenge transaction.
+ *
+ * @example
+ * ```ts
+ * import { verifyChallenge } from '@stellar-compliance-kit/sep10-auth';
+ *
+ * const result = await verifyChallenge(signedChallengeXDR, {
+ *   serverAccountId: 'GSERVER...',
+ *   homeDomains: 'example.com',
+ *   webAuthDomain: 'auth.example.com',
+ * });
+ *
+ * if (!result.valid) {
+ *   console.error(result.errorCode, result.error);
+ * } else {
+ *   console.log('Authenticated as', result.address, 'jti:', result.jti);
+ * }
+ * ```
+ */
 export async function verifyChallenge(
   signedTransactionXDR: string,
   options: VerifyChallengeOptions,

@@ -11,6 +11,28 @@
  * The variadic `...args: unknown[]` signature intentionally matches the
  * `console.*` family so consumers can pass `console` directly without
  * wrapping it.
+ *
+ * @example
+ * ```ts
+ * import type { Logger } from '@stellar-compliance-kit/logger';
+ *
+ * // `console` already satisfies the Logger shape.
+ * const logger: Logger = console;
+ * logger.info('adapter started', { adapter: 'sep12' });
+ * ```
+ *
+ * @example
+ * ```ts
+ * import type { Logger } from '@stellar-compliance-kit/logger';
+ *
+ * // A custom logger can be any object with the four level methods.
+ * const logger: Logger = {
+ *   debug: (...args) => {},
+ *   info: (...args) => {},
+ *   warn: (...args) => {},
+ *   error: (...args) => {},
+ * };
+ * ```
  */
 export interface Logger {
   debug: (...args: unknown[]) => void;
@@ -25,6 +47,26 @@ export interface Logger {
  * Return a child logger bound to `bindings`. Uses `logger.child` when
  * available, otherwise falls back to a wrapper that prepends the bindings
  * object to every call. Nested children merge bindings (inner wins).
+ *
+ * @example
+ * ```ts
+ * import { consoleLogger, getChildLogger } from '@stellar-compliance-kit/logger';
+ *
+ * const requestLogger = getChildLogger(consoleLogger, { requestId: 'abc-123' });
+ * requestLogger.info('handling request');
+ * // => { requestId: 'abc-123' } handling request
+ * ```
+ *
+ * @example
+ * ```ts
+ * import { consoleLogger, getChildLogger } from '@stellar-compliance-kit/logger';
+ *
+ * // Nested children merge bindings; inner keys win.
+ * const parent = getChildLogger(consoleLogger, { adapter: 'sep12', requestId: 'a' });
+ * const child = parent.child!({ requestId: 'b' });
+ * child.warn('retrying');
+ * // => { adapter: 'sep12', requestId: 'b' } retrying
+ * ```
  */
 export function getChildLogger(logger: Logger, bindings: Record<string, unknown>): Logger {
   if (typeof logger.child === 'function') return logger.child(bindings);
@@ -68,6 +110,22 @@ function makeBoundChild(
 /**
  * Default logger that delegates to the global `console`.
  * Suitable for production use when no custom logger is provided.
+ *
+ * @example
+ * ```ts
+ * import { consoleLogger } from '@stellar-compliance-kit/logger';
+ *
+ * consoleLogger.info('compliance check passed', { adapter: 'sep12' });
+ * ```
+ *
+ * @example
+ * ```ts
+ * import { consoleLogger } from '@stellar-compliance-kit/logger';
+ *
+ * const scoped = consoleLogger.child!({ adapter: 'sep31' });
+ * scoped.error('transfer failed');
+ * // => { adapter: 'sep31' } transfer failed
+ * ```
  */
 export const consoleLogger: Logger = {
   debug: (...args: unknown[]) => console.debug(...args),
@@ -84,6 +142,22 @@ export const consoleLogger: Logger = {
  * No-op logger that silences all output.
  * Useful in tests that don't want to assert on log output, or in
  * consumers that manage their own logging pipeline externally.
+ *
+ * @example
+ * ```ts
+ * import { noopLogger } from '@stellar-compliance-kit/logger';
+ *
+ * // Pass a silent logger in tests.
+ * const adapter = createAdapter({ logger: noopLogger });
+ * ```
+ *
+ * @example
+ * ```ts
+ * import { noopLogger } from '@stellar-compliance-kit/logger';
+ *
+ * // Children of the no-op logger are also no-ops.
+ * noopLogger.child!({ requestId: 'abc' }).info('nothing is emitted');
+ * ```
  */
 export const noopLogger: Logger = {
   debug: () => undefined,
@@ -96,6 +170,13 @@ export const noopLogger: Logger = {
 /**
  * The four log levels supported by {@link createLeveledLogger}, ordered from
  * least to most severe.
+ *
+ * @example
+ * ```ts
+ * import type { LogLevel } from '@stellar-compliance-kit/logger';
+ *
+ * const level: LogLevel = 'warn';
+ * ```
  */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -122,6 +203,15 @@ const LOG_LEVEL_RANK: Record<LogLevel, number> = {
  * const logger = createLeveledLogger(consoleLogger, process.env.LOG_LEVEL ?? 'info');
  * ```
  *
+ * @example
+ * ```ts
+ * import { consoleLogger, createLeveledLogger } from '@stellar-compliance-kit/logger';
+ *
+ * const logger = createLeveledLogger(consoleLogger, 'warn');
+ * logger.info('suppressed');  // no output
+ * logger.warn('emitted');     // => emitted
+ * ```
+ *
  * @param base     The underlying logger to delegate to when the level passes.
  * @param minLevel The minimum level to emit.  Calls below this level are no-ops.
  * @returns        A new Logger instance; the `base` logger is never mutated.
@@ -144,7 +234,17 @@ export function createLeveledLogger(base: Logger, minLevel: LogLevel): Logger {
   };
 }
 
-/** Writable target for {@link jsonLogger}. Only `write` is used. */
+/**
+ * Writable target for {@link jsonLogger}. Only `write` is used.
+ *
+ * @example
+ * ```ts
+ * import type { JsonLogStream } from '@stellar-compliance-kit/logger';
+ *
+ * const lines: string[] = [];
+ * const stream: JsonLogStream = { write: (chunk) => lines.push(chunk) };
+ * ```
+ */
 export interface JsonLogStream {
   write(chunk: string): void;
 }
@@ -208,6 +308,30 @@ function argsToRecord(args: unknown[]): { msg: string; context: Record<string, u
  * Each line has pino-compatible field names: `time` (epoch ms), `level`
  * (level name), `msg` (message string) plus any merged `context` fields.
  * Errors serialize to `{ msg, stack, type }`.
+ *
+ * @example
+ * ```ts
+ * import { jsonLogger } from '@stellar-compliance-kit/logger';
+ *
+ * const logger = jsonLogger({ level: 'info' });
+ * logger.info('compliance check passed', { adapter: 'sep12' });
+ * // => {"time":1700000000000,"level":"info","msg":"compliance check passed","adapter":"sep12"}
+ * ```
+ *
+ * @example
+ * ```ts
+ * import { jsonLogger } from '@stellar-compliance-kit/logger';
+ *
+ * // Capture output with a custom stream instead of stdout.
+ * const lines: string[] = [];
+ * const logger = jsonLogger({ stream: { write: (chunk) => lines.push(chunk) } });
+ * logger.error(new Error('boom'));
+ * // lines[0] => {"time":...,"level":"error","msg":"boom","stack":"...","type":"Error"}
+ * ```
+ *
+ * @param options.level  Minimum level to emit (default `'debug'`).
+ * @param options.stream Writable target (default `process.stdout`).
+ * @returns              A new Logger that emits JSON lines.
  */
 export function jsonLogger(options: { level?: LogLevel; stream?: JsonLogStream } = {}): Logger {
   const minLevel = options.level ?? 'debug';

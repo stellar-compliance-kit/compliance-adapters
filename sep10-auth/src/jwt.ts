@@ -33,6 +33,16 @@ function base64url(input: Buffer | string): string {
  *
  * The claims follow SEP-10 §Token: `iss`, `sub`, `iat`, `exp`, `jti` and the
  * optional `client_domain`.
+ *
+ * @example
+ * ```ts
+ * const token = issueJwt({
+ *   secret: process.env.JWT_SECRET!,
+ *   issuer: 'https://example.com',
+ *   subject: 'GABCD...XYZ',
+ *   clientDomain: 'wallet.example.com',
+ * });
+ * ```
  */
 export function issueJwt(options: IssueJwtOptions): string {
   const iat = Math.floor((options.now ?? Date.now()) / 1000);

@@ -72,6 +72,17 @@ export interface Sep10RouterOptions {
 
 const DEFAULT_MAX_TRANSACTION_LENGTH = 8192;
 
+/**
+ * Returns the first non-empty string from a query/body value, which may be a
+ * string or an array of strings.
+ *
+ * @example
+ * ```ts
+ * firstString(['abc', 'def']); // 'abc'
+ * firstString('');             // undefined
+ * firstString(undefined);      // undefined
+ * ```
+ */
 function firstString(value: unknown): string | undefined {
   const v = Array.isArray(value) ? value[0] : value;
   return typeof v === 'string' && v !== '' ? v : undefined;
@@ -90,11 +101,30 @@ function firstString(value: unknown): string | undefined {
  *
  * @example
  * ```ts
+ * import express from 'express';
+ * import { Keypair, Networks } from '@stellar/stellar-sdk';
+ * import { createSep10Router } from '@compliance/sep10-auth';
+ *
+ * const app = express();
  * app.use(createSep10Router({
- *   serverKeypair,
+ *   serverKeypair: Keypair.fromSecret(process.env.SEP10_SERVER_SECRET!),
  *   homeDomain: 'example.com',
+ *   networkPassphrase: Networks.TESTNET,
  *   jwtSecret: process.env.SEP10_JWT_SECRET!,
  * }));
+ * app.listen(3000);
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Custom token issuance and client-domain support instead of the built-in JWT issuer.
+ * const router = createSep10Router({
+ *   serverKeypair,
+ *   homeDomain: ['example.com', 'auth.example.com'],
+ *   issueToken: async (account, { clientDomain }) => mySigner.sign({ sub: account, clientDomain }),
+ *   resolveClientSigningKey: async (domain) => fetchSigningKeyFromToml(domain),
+ *   rateLimit: { windowMs: 60_000, max: 30 },
+ * });
  * ```
  */
 export function createSep10Router(options: Sep10RouterOptions): Router {

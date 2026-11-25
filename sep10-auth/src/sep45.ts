@@ -164,6 +164,25 @@ function buildEntry(
  *
  * Throws on invalid input (non-`C...` client, non-`C...` web-auth contract,
  * non-bare domains, unsignable server keypair), mirroring `generateChallenge`.
+ *
+ * @example
+ * ```ts
+ * import { Keypair, Networks } from '@stellar/stellar-sdk';
+ * import { generateContractChallenge } from 'sep10-auth/dist/sep45';
+ *
+ * const serverKeypair = Keypair.fromSecret(process.env.SERVER_SECRET!);
+ * const challenge = await generateContractChallenge(
+ *   'CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABSC4',
+ *   serverKeypair,
+ *   {
+ *     webAuthContractId: 'CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBSC4',
+ *     validUntilLedger: 1_234_567,
+ *     homeDomain: 'anchor.example.com',
+ *     networkPassphrase: Networks.TESTNET,
+ *   },
+ * );
+ * // Send `challenge.authorizationEntries` to the client; remember `challenge.nonce`.
+ * ```
  */
 export async function generateContractChallenge(
   clientContractId: string,
@@ -313,6 +332,28 @@ function hasSignature(creds: xdr.SorobanAddressCredentials): boolean {
  * `home_domain`, `web_auth_domain`, `web_auth_domain_account`), expiry, the
  * server's ed25519 signature, and finally the client's authorization via
  * `options.verifyClientAuthorization`.
+ *
+ * @example
+ * ```ts
+ * import { Keypair, Networks } from '@stellar/stellar-sdk';
+ * import { verifyContractChallenge } from 'sep10-auth/dist/sep45';
+ *
+ * const result = await verifyContractChallenge(clientReturnedEntries, {
+ *   webAuthContractId: 'CBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBSC4',
+ *   serverAccountId: Keypair.fromSecret(process.env.SERVER_SECRET!).publicKey(),
+ *   homeDomains: ['anchor.example.com'],
+ *   webAuthDomain: 'anchor.example.com',
+ *   networkPassphrase: Networks.TESTNET,
+ *   currentLedger: 1_234_000,
+ *   verifyClientAuthorization: async (clientEntry, allEntries) => {
+ *     // Typically: simulate `web_auth_verify` via Soroban RPC with the signed entries.
+ *     return true;
+ *   },
+ * });
+ * if (result.valid) {
+ *   console.log('Authenticated contract account:', result.address);
+ * }
+ * ```
  */
 export async function verifyContractChallenge(
   authorizationEntries: string[],

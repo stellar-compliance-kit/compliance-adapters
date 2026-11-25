@@ -26,6 +26,16 @@ declare global {
  *
  * A discriminated union: `ok: true` carries the extracted token; `ok: false`
  * carries a human-readable reason string explaining why parsing failed.
+ *
+ * @example
+ * ```ts
+ * const result: ParseBearerTokenResult = { ok: true, token: 'AAAA...' };
+ * if (result.ok) {
+ *   console.log(result.token);
+ * } else {
+ *   console.error(result.reason);
+ * }
+ * ```
  */
 export type ParseBearerTokenResult =
   | { ok: true; token: string }
@@ -100,6 +110,20 @@ function parseCustomToken(token: string | undefined): ParseBearerTokenResult {
   return token ? { ok: true, token } : { ok: false, reason: 'missing bearer token' };
 }
 
+/**
+ * Options accepted by {@link createSep10Middleware} and the framework-agnostic
+ * helpers in this module.
+ *
+ * @example
+ * ```ts
+ * const options: Sep10MiddlewareOptions = {
+ *   serverAccountId: 'G...',
+ *   homeDomains: ['example.com'],
+ *   webAuthDomain: 'example.com',
+ *   networkPassphrase: Networks.TESTNET,
+ * };
+ * ```
+ */
 export interface Sep10MiddlewareOptions extends VerifyChallengeOptions {
   /**
    * Optional store consulted after a challenge verifies successfully, to
@@ -136,12 +160,13 @@ const DEFAULT_MAX_TOKEN_LENGTH = 8192;
  * RFC 6750 §3.1 error code for a 401 response: `invalid_request` when the
  * `Authorization` header is missing or malformed, `invalid_token` when the
  * token itself was rejected.
+ *
+ * @example
+ * ```ts
+ * const code: BearerErrorCode = 'invalid_token';
+ * ```
  */
 export type BearerErrorCode = 'invalid_request' | 'invalid_token';
-
-function buildWwwAuthenticate(realm: string, error: BearerErrorCode): string {
-  return `Bearer realm="${realm}", error="${error}"`;
-}
 
 /** Request headers as exposed by Node's `http` module and Fastify. */
 export type RequestHeaders = Record<string, string | string[] | undefined>;
@@ -151,6 +176,16 @@ export type RequestHeaders = Record<string, string | string[] | undefined>;
  *
  * On failure, `wwwAuthenticate` is the RFC 6750 §3 `WWW-Authenticate` header
  * value adapters must send alongside the 401 response.
+ *
+ * @example
+ * ```ts
+ * const result: AuthenticateRequestResult = await authenticateRequest(headers, options);
+ * if (result.ok) {
+ *   console.log('authenticated', result.address);
+ * } else {
+ *   res.set('WWW-Authenticate', result.wwwAuthenticate).status(401).end();
+ * }
+ * ```
  */
 export type AuthenticateRequestResult =
   | { ok: true; address: string; jti?: string }
@@ -171,6 +206,21 @@ function buildWwwAuthenticate(realm: string, error: BearerErrorCode): string {
 /**
  * Validates the middleware options once at construction time and returns the
  * normalised home domains. Shared by every framework adapter.
+ *
+ * @param options - The SEP-10 middleware options to validate.
+ * @returns The normalised array of home domains.
+ * @throws If `serverAccountId`, `homeDomains`, or `webAuthDomain` are invalid.
+ *
+ * @example
+ * ```ts
+ * const homeDomains = assertSep10MiddlewareOptions({
+ *   serverAccountId: 'G...',
+ *   homeDomains: 'example.com',
+ *   webAuthDomain: 'example.com',
+ *   networkPassphrase: Networks.TESTNET,
+ * });
+ * // homeDomains => ['example.com']
+ * ```
  */
 export function assertSep10MiddlewareOptions(options: Sep10MiddlewareOptions): string[] {
   if (!StrKey.isValidEd25519PublicKey(options.serverAccountId)) {
@@ -202,6 +252,23 @@ export function assertSep10MiddlewareOptions(options: Sep10MiddlewareOptions): s
  * Verifies the `Authorization` header and signed challenge. It does not
  * consult the revocation store, so callers needing revocation checks should
  * use {@link authenticateRequest} instead.
+ *
+ * @param headers - The request headers (Node `http` / Fastify style).
+ * @param options - The SEP-10 middleware options.
+ * @returns The authentication result, without revocation checks applied.
+ *
+ * @example
+ * ```ts
+ * const result = await verifyRequestHeaders(
+ *   { authorization: req.headers.authorization },
+ *   options,
+ * );
+ * if (!result.ok) {
+ *   res.set('WWW-Authenticate', result.wwwAuthenticate).status(401).end();
+ *   return;
+ * }
+ * console.log('verified address', result.address);
+ * ```
  */
 export async function verifyRequestHeaders(
   headers: RequestHeaders,
@@ -269,6 +336,19 @@ export async function verifyRequestHeaders(
  * {@link verifyRequestHeaders} result. A failed result is returned unchanged.
  * A store lookup failure rejects, as it is an internal failure rather than an
  * authentication failure.
+ *
+ * @param result - A result from {@link verifyRequestHeaders}.
+ * @param options - The SEP-10 middleware options (may carry a `revocationStore`).
+ * @returns The original result, or a 401 failure result if revoked.
+ *
+ * @example
+ * ```ts
+ * const verified = await verifyRequestHeaders(headers, options);
+ * const result = await applyRevocationStore(verified, options);
+ * if (!result.ok) {
+ *   res.set('WWW-Authenticate', result.wwwAuthenticate).status(401).end();
+ * }
+ * ```
  */
 export async function applyRevocationStore(
   result: AuthenticateRequestResult,
@@ -315,6 +395,20 @@ export async function applyRevocationStore(
  * Fastify plugin (`sep10-auth/fastify`). A thrown error (e.g. the revocation
  * store being unavailable) is an internal failure, not an authentication
  * failure, and is left for the adapter to forward to its error handler.
+ *
+ * @param headers - The request headers (Node `http` / Fastify style).
+ * @param options - The SEP-10 middleware options.
+ * @returns The authentication result, including revocation checks.
+ *
+ * @example
+ * ```ts
+ * const result = await authenticateRequest(req.headers, options);
+ * if (!result.ok) {
+ *   res.set('WWW-Authenticate', result.wwwAuthenticate).status(401).end();
+ *   return;
+ * }
+ * console.log('authenticated', result.address);
+ * ```
  */
 export async function authenticateRequest(
   headers: RequestHeaders,
@@ -323,6 +417,34 @@ export async function authenticateRequest(
   return applyRevocationStore(await verifyRequestHeaders(headers, options), options);
 }
 
+/**
+ * Creates an Express middleware that authenticates requests carrying a signed
+ * SEP-10 challenge as `Authorization: Bearer <base64-xdr>`. On success it sets
+ * `req.stellarAddress` (and `req.stellarTokenId` when a `jti` is present) and
+ * calls `next()`; on failure it responds with 401 and an RFC 6750
+ * `WWW-Authenticate` header.
+ *
+ * @param options - The SEP-10 middleware options. Validated eagerly at
+ *   construction time.
+ * @returns An Express `RequestHandler`.
+ *
+ * @example
+ * ```ts
+ * import express from 'express';
+ * import { createSep10Middleware } from 'sep10-auth';
+ *
+ * const app = express();
+ * app.use(
+ *   createSep10Middleware({
+ *     serverAccountId: 'G...',
+ *     homeDomains: ['example.com'],
+ *     webAuthDomain: 'example.com',
+ *     networkPassphrase: Networks.TESTNET,
+ *   }),
+ * );
+ * app.get('/me', (req, res) => res.json({ address: req.stellarAddress }));
+ * ```
+ */
 // Reference pattern only: expects the raw signed SEP-10 challenge XDR on every
 // request via `Authorization: Bearer <base64-xdr>`. A production app would
 // typically verify once and issue a short-lived session JWT instead of

@@ -203,6 +203,22 @@ class NoopSpan implements Span {
  * A fully functional tracer that records spans and exports them via the
  * provided `exporter` callback. When no exporter is provided, spans are
  * still recorded in-memory but export is skipped.
+ *
+ * @example
+ * ```ts
+ * import { DefaultTracer } from '@compliance-adapters/tracing';
+ *
+ * const tracer = new DefaultTracer({
+ *   serviceName: 'horizon-listener',
+ *   exporter: (span) => console.log(span.name, span.durationMs),
+ * });
+ *
+ * const span = tracer.startSpan('rpc_poll');
+ * span.setAttribute('ledger', 12345);
+ * span.end('ok');
+ *
+ * await tracer.shutdown();
+ * ```
  */
 export class DefaultTracer implements Tracer {
   private readonly options: Required<
@@ -302,6 +318,16 @@ export class DefaultTracer implements Tracer {
 /**
  * A no-op tracer that creates no spans and never calls any exporter.
  * Used as the default when tracing is not configured — zero overhead.
+ *
+ * @example
+ * ```ts
+ * import { NoopTracer } from '@compliance-adapters/tracing';
+ *
+ * const tracer = new NoopTracer();
+ * const span = tracer.startSpan('address_check');
+ * span.setAttribute('address', 'GABC…'); // discarded
+ * span.end('ok');
+ * ```
  */
 export class NoopTracer implements Tracer {
   startSpan(_name: string, _parentContext?: TracingContext): Span {
@@ -319,6 +345,20 @@ export class NoopTracer implements Tracer {
   async shutdown(): Promise<void> {}
 }
 
+/**
+ * Extract a {@link TracingContext} from an incoming HTTP header map (plain
+ * object or `Headers`) by reading the W3C `traceparent` header.
+ *
+ * @example
+ * ```ts
+ * import { extractTraceContext } from '@compliance-adapters/tracing';
+ *
+ * const ctx = extractTraceContext({
+ *   traceparent: '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+ * });
+ * // ctx?.traceId === '4bf92f3577b34da6a3ce929d0e0e4736'
+ * ```
+ */
 export function extractTraceContext(
   headers: Record<string, string | string[] | undefined> | Headers,
   tracer?: Tracer,

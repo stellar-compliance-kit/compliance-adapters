@@ -47,6 +47,15 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Check Package Dependency Graph
+        # Fails if any circular dependency exists between workspace packages
+        # (issue #1057).
+        run: npm run check:deps
+
+      - name: Type Tests
+        # Type-level assertions for key public exports (issue #1058).
+        run: npm run test:types
+
       - name: Unit Tests
         run: npm test -- --coverage
 

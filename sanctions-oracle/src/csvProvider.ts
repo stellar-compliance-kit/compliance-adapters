@@ -34,6 +34,14 @@ export interface CsvSanctionsProviderOptions {
  * newlines and doubled-quote escapes), CRLF/LF line endings and a leading
  * UTF-8 BOM. Returns one string[] per record; blank lines yield `['']` so
  * record indexes stay aligned with line numbers.
+ *
+ * @example
+ * ```ts
+ * import { parseCsv } from './csvProvider';
+ *
+ * const rows = parseCsv('address,source\nGABC...,OFAC\n');
+ * // => [['address', 'source'], ['GABC...', 'OFAC']]
+ * ```
  */
 export function parseCsv(content: string): string[][] {
   const text = content.charCodeAt(0) === 0xfeff ? content.slice(1) : content;
@@ -77,6 +85,22 @@ export function parseCsv(content: string): string[][] {
   return rows;
 }
 
+/**
+ * Sanctions provider backed by a local CSV watchlist file.
+ *
+ * The CSV is read once at construction time. The first column must contain a
+ * Stellar `G...` address; an optional second column supplies the source label
+ * (defaults to `csv-watchlist-v1`). Invalid rows are skipped with a warning.
+ *
+ * @example
+ * ```ts
+ * import { CsvSanctionsProvider } from './csvProvider';
+ *
+ * const provider = new CsvSanctionsProvider('./watchlist.csv');
+ * const result = await provider.checkAddress('GABCDEF...');
+ * // => { flagged: true, source: 'OFAC' }
+ * ```
+ */
 export class CsvSanctionsProvider implements SanctionsProvider {
   private flaggedAddresses: Map<string, string[]> = new Map();
   private readonly logger: Logger;
@@ -135,6 +159,20 @@ export class CsvSanctionsProvider implements SanctionsProvider {
     }
   }
 
+  /**
+   * Check whether an address appears in the loaded CSV watchlist.
+   *
+   * @param address Stellar address to check (normalized before lookup).
+   * @returns `{ flagged: true, source }` when listed, otherwise
+   * `{ flagged: false, source: 'csv-watchlist-v1' }`.
+   *
+   * @example
+   * ```ts
+   * const provider = new CsvSanctionsProvider('./watchlist.csv');
+   * const { flagged, source } = await provider.checkAddress('GABCDEF...');
+   * if (flagged) console.log(`Listed by ${source}`);
+   * ```
+   */
   async checkAddress(address: string): Promise<{ flagged: boolean; source: string }> {
     const sources = this.flaggedAddresses.get(normalizeStellarAddress(address));
     if (sources && sources.length > 0) {

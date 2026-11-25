@@ -40,6 +40,20 @@ export interface HorizonEventSourceOptions {
  * Pagination follows Horizon cursors: pass the returned `nextCursor` back as
  * the next call's `cursor` to resume. `nextCursor` is the last record's
  * `paging_token`, falling back to the input cursor when the page is empty.
+ *
+ * @example
+ * ```ts
+ * import { HorizonEventSource } from '@stellar-compliance-kit/horizon-listener';
+ *
+ * const source = new HorizonEventSource({
+ *   horizonUrl: 'https://horizon-testnet.stellar.org',
+ *   accountId: 'GABC...XYZ',
+ *   endpoint: 'operations',
+ * });
+ *
+ * const { events, nextCursor } = await source.getEvents();
+ * console.log(events.length, nextCursor);
+ * ```
  */
 export class HorizonEventSource implements EventSource {
   private readonly options: Required<
@@ -66,6 +80,24 @@ export class HorizonEventSource implements EventSource {
       : `${base}/${endpoint}`;
   }
 
+  /**
+   * Fetch the next page of Horizon records mapped to {@link RawContractEvent}s.
+   *
+   * @param cursor - Optional Horizon cursor to resume from (use a previous
+   *   call's `nextCursor`).
+   * @returns The mapped events and the cursor to pass to the next call.
+   *
+   * @example
+   * ```ts
+   * const source = new HorizonEventSource({ horizonUrl: 'https://horizon.stellar.org' });
+   * let cursor: string | undefined;
+   * for (let page = 0; page < 3; page++) {
+   *   const { events, nextCursor } = await source.getEvents(cursor);
+   *   console.log(events.map((e) => e.id));
+   *   cursor = nextCursor;
+   * }
+   * ```
+   */
   async getEvents(
     cursor: string | undefined,
   ): Promise<{ events: RawContractEvent[]; nextCursor: string }> {

@@ -10,16 +10,51 @@
  * challenge's `timeoutSeconds` to elapse naturally.
  */
 export interface RevocationStore {
-  /** Returns whether `address` is currently revoked. */
+  /**
+   * Returns whether `address` is currently revoked.
+   *
+   * @example
+   * ```ts
+   * const store: RevocationStore = new InMemoryRevocationStore();
+   * await store.revoke('GABC...');
+   * await store.isRevoked('GABC...'); // true
+   * ```
+   */
   isRevoked(address: string): boolean | Promise<boolean>;
   /**
    * Revokes `address`. If `until` is provided, the revocation expires at
    * that time; otherwise it remains in effect until {@link unrevoke} is called.
+   *
+   * @example
+   * ```ts
+   * const store: RevocationStore = new InMemoryRevocationStore();
+   * await store.revoke('GABC...'); // permanent
+   * await store.revoke('GDEF...', new Date(Date.now() + 60_000)); // 1 minute
+   * ```
    */
   revoke(address: string, until?: Date): void | Promise<void>;
-  /** Lifts a revocation previously set with {@link revoke}. */
+  /**
+   * Lifts a revocation previously set with {@link revoke}.
+   *
+   * @example
+   * ```ts
+   * const store: RevocationStore = new InMemoryRevocationStore();
+   * await store.revoke('GABC...');
+   * await store.unrevoke('GABC...');
+   * await store.isRevoked('GABC...'); // false
+   * ```
+   */
   unrevoke(address: string): void | Promise<void>;
-  /** Optionally enumerates the addresses that are currently revoked. */
+  /**
+   * Optionally enumerates the addresses that are currently revoked.
+   *
+   * @example
+   * ```ts
+   * const store: RevocationStore = new InMemoryRevocationStore();
+   * await store.revoke('GABC...');
+   * await store.list?.(); // ['GABC...']
+   * ```
+   */
   list?(): string[] | Promise<string[]>;
   /**
    * Revokes a single token by its identifier (`jti`) without affecting other
@@ -27,9 +62,24 @@ export interface RevocationStore {
    * `expiresAt` (the token's own expiry), after which it is pruned.
    * Optional so address-only stores keep working; the middleware checks
    * {@link isTokenRevoked} only when it is implemented.
+   *
+   * @example
+   * ```ts
+   * const store: RevocationStore = new InMemoryRevocationStore();
+   * await store.revokeToken?.('jti-123', new Date(Date.now() + 300_000));
+   * ```
    */
   revokeToken?(jti: string, expiresAt: Date): void | Promise<void>;
-  /** Returns whether the token identified by `jti` is currently revoked. */
+  /**
+   * Returns whether the token identified by `jti` is currently revoked.
+   *
+   * @example
+   * ```ts
+   * const store: RevocationStore = new InMemoryRevocationStore();
+   * await store.revokeToken?.('jti-123', new Date(Date.now() + 300_000));
+   * await store.isTokenRevoked?.('jti-123'); // true
+   * ```
+   */
   isTokenRevoked?(jti: string): boolean | Promise<boolean>;
 }
 
@@ -40,22 +90,56 @@ export interface RevocationStore {
  */
 export interface InMemoryRevocationStoreOptions {
   /**
- * Maximum number of revocations to retain. When set and a new revocation
- * would exceed it, expired entries are reclaimed first, followed by temporary
- * revocations, and lastly permanent revocations in FIFO order.
- */
+   * Maximum number of revocations to retain. When set and a new revocation
+   * would exceed it, expired entries are reclaimed first, followed by temporary
+   * revocations, and lastly permanent revocations in FIFO order.
+   *
+   * @example
+   * ```ts
+   * const options: InMemoryRevocationStoreOptions = { maxEntries: 1000 };
+   * ```
+   */
   maxEntries?: number;
 }
 
+/**
+ * In-memory reference implementation of {@link RevocationStore}.
+ *
+ * @example
+ * ```ts
+ * const store = new InMemoryRevocationStore({ maxEntries: 1000 });
+ * store.revoke('GABC...');
+ * store.isRevoked('GABC...'); // true
+ * ```
+ */
 export class InMemoryRevocationStore implements RevocationStore {
   private readonly revoked = new Map<string, Date | undefined>();
   private readonly revokedTokens = new Map<string, Date>();
   private readonly maxEntries?: number;
 
+  /**
+   * Creates a new in-memory revocation store.
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRevocationStore();
+   * const bounded = new InMemoryRevocationStore({ maxEntries: 500 });
+   * ```
+   */
   constructor(options: InMemoryRevocationStoreOptions = {}) {
     this.maxEntries = options.maxEntries;
   }
 
+  /**
+   * Returns whether `address` is currently revoked.
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRevocationStore();
+   * store.revoke('GABC...');
+   * store.isRevoked('GABC...'); // true
+   * ```
+   */
   isRevoked(address: string): boolean {
     const until = this.revoked.get(address);
     if (until === undefined) {
@@ -68,6 +152,16 @@ export class InMemoryRevocationStore implements RevocationStore {
     return true;
   }
 
+  /**
+   * Revokes `address`, optionally until `until`.
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRevocationStore();
+   * store.revoke('GABC...');
+   * store.revoke('GDEF...', new Date(Date.now() + 60_000));
+   * ```
+   */
   revoke(address: string, until?: Date): void {
     this.revoked.delete(address);
     this.revoked.set(address, until);
@@ -112,6 +206,17 @@ export class InMemoryRevocationStore implements RevocationStore {
     }
   }
 
+  /**
+   * Lifts a revocation previously set with {@link revoke}.
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRevocationStore();
+   * store.revoke('GABC...');
+   * store.unrevoke('GABC...');
+   * store.isRevoked('GABC...'); // false
+   * ```
+   */
   unrevoke(address: string): void {
     this.revoked.delete(address);
   }
@@ -120,6 +225,13 @@ export class InMemoryRevocationStore implements RevocationStore {
    * Revokes the single token identified by `jti` until `expiresAt`. Expired
    * token revocations are pruned on every call, so the map never retains a
    * token past its own expiry.
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRevocationStore();
+   * store.revokeToken('jti-123', new Date(Date.now() + 300_000));
+   * store.isTokenRevoked('jti-123'); // true
+   * ```
    */
   revokeToken(jti: string, expiresAt: Date): void {
     this.pruneExpiredTokens();
@@ -129,6 +241,17 @@ export class InMemoryRevocationStore implements RevocationStore {
     this.revokedTokens.set(jti, expiresAt);
   }
 
+  /**
+   * Returns whether the token identified by `jti` is currently revoked.
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRevocationStore();
+   * store.revokeToken('jti-123', new Date(Date.now() + 300_000));
+   * store.isTokenRevoked('jti-123'); // true
+   * store.isTokenRevoked('jti-999'); // false
+   * ```
+   */
   isTokenRevoked(jti: string): boolean {
     const expiresAt = this.revokedTokens.get(jti);
     if (expiresAt === undefined) {
@@ -141,17 +264,44 @@ export class InMemoryRevocationStore implements RevocationStore {
     return true;
   }
 
-  /** Addresses currently revoked; expired timed revocations are excluded (and lazily evicted). */
+  /**
+   * Addresses currently revoked; expired timed revocations are excluded (and lazily evicted).
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRevocationStore();
+   * store.revoke('GABC...');
+   * store.list(); // ['GABC...']
+   * ```
+   */
   list(): string[] {
     return [...this.revoked.keys()].filter((address) => this.isRevoked(address));
   }
 
-  /** Current number of tracked revocations (including any not yet lazily expired). */
+  /**
+   * Current number of tracked revocations (including any not yet lazily expired).
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRevocationStore();
+   * store.revoke('GABC...');
+   * store.size(); // 1
+   * ```
+   */
   size(): number {
     return this.revoked.size;
   }
 
-  /** Current number of tracked per-token revocations, after pruning expired ones. */
+  /**
+   * Current number of tracked per-token revocations, after pruning expired ones.
+   *
+   * @example
+   * ```ts
+   * const store = new InMemoryRevocationStore();
+   * store.revokeToken('jti-123', new Date(Date.now() + 300_000));
+   * store.tokenSize(); // 1
+   * ```
+   */
   tokenSize(): number {
     this.pruneExpiredTokens();
     return this.revokedTokens.size;

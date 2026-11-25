@@ -31,6 +31,16 @@ export type RetryOptions = RetryWithBackoffOptions;
 /**
  * Abort-aware sleep: resolves after `ms`, rejects with an `AbortError`
  * when `signal` aborts, and always clears its timer (no open handles).
+ *
+ * @example
+ * ```ts
+ * await sleep(100);
+ *
+ * const controller = new AbortController();
+ * const pending = sleep(1000, { signal: controller.signal });
+ * controller.abort();
+ * await pending; // rejects with an AbortError
+ * ```
  */
 export function sleep(ms: number, options: { signal?: AbortSignal } = {}): Promise<void> {
   const { signal } = options;
@@ -68,6 +78,17 @@ function createAbortError(): Error {
 // randomFn is injectable (defaulting to Math.random) so tests can assert an
 // exact delay instead of a range, and so callers can disable jitter entirely
 // for deterministic timing assertions.
+/**
+ * Computes the exponential backoff delay for a given 0-based attempt.
+ *
+ * @example
+ * ```ts
+ * computeBackoffDelayMs(0); // ~500ms (with default jitter)
+ * computeBackoffDelayMs(3, { jitter: false }); // 4000
+ * computeBackoffDelayMs(2, { baseMs: 100, jitter: false }); // 400
+ * computeBackoffDelayMs(1, { jitterStrategy: 'full', randomFn: () => 0.5 }); // 500
+ * ```
+ */
 export function computeBackoffDelayMs(attempt: number, options: BackoffOptions = {}): number {
   if (!Number.isFinite(attempt) || attempt < 0) {
     throw new RangeError(
@@ -120,6 +141,18 @@ const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
  * @param fn Async function to execute. Receives the 0-based attempt index.
  * @param options Retry options controlling attempts, backoff, and retry filtering.
  * @returns Result of `fn` upon success.
+ *
+ * @example
+ * ```ts
+ * const data = await retryWithBackoff(
+ *   async (attempt) => {
+ *     const res = await fetch('https://example.com/api');
+ *     if (!res.ok) throw new Error(`HTTP ${res.status}`);
+ *     return res.json();
+ *   },
+ *   { maxAttempts: 5, baseMs: 200, shouldRetry: (err) => !(err instanceof TypeError) },
+ * );
+ * ```
  */
 export async function retryWithBackoff<T>(
   fn: (attempt: number) => Promise<T>,

@@ -16,6 +16,14 @@ export interface JsonlAuditLoggerOptions {
  * `path` (opened in append-only mode). Each line is the serialized entry,
  * including its ISO 8601 `timestamp`. Writes are serialized through a promise
  * chain so concurrent calls never interleave partial lines.
+ *
+ * @example
+ * ```ts
+ * import { createJsonlAuditLogger } from './auditLog';
+ *
+ * const logger = createJsonlAuditLogger('./audit.jsonl', { fsync: true });
+ * await logger({ timestamp: new Date().toISOString(), event: 'sync', address: 'GABC...' });
+ * ```
  */
 export function createJsonlAuditLogger(
   path: string,

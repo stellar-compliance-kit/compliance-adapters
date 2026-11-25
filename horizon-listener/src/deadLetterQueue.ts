@@ -34,6 +34,16 @@ function toEntry(event: RawContractEvent, error: unknown): DeadLetterEvent {
   };
 }
 
+/**
+ * In-memory dead-letter queue; entries are lost when the process exits.
+ *
+ * @example
+ * ```ts
+ * const dlq = new InMemoryDeadLetterQueue();
+ * await dlq.enqueue(event, new Error('handler failed'));
+ * console.log(dlq.getAll().length); // 1
+ * ```
+ */
 export class InMemoryDeadLetterQueue implements DeadLetterQueue {
   protected entries: DeadLetterEvent[] = [];
 
@@ -61,6 +71,13 @@ export class InMemoryDeadLetterQueue implements DeadLetterQueue {
  * JSON-lines file-backed queue. Existing entries are loaded on construction so
  * they survive restarts. All disk writes are synchronous, so concurrent
  * `enqueue` calls cannot interleave or lose data.
+ *
+ * @example
+ * ```ts
+ * const dlq = new FileDeadLetterQueue('./data/dead-letters.jsonl');
+ * await dlq.enqueue(event, new Error('handler failed'));
+ * console.log(dlq.getFilePath()); // ./data/dead-letters.jsonl
+ * ```
  */
 export class FileDeadLetterQueue extends InMemoryDeadLetterQueue {
   constructor(private readonly filePath: string) {
@@ -127,6 +144,16 @@ export interface ReplayDeadLetterQueueResult {
 /**
  * Replays DLQ entries (oldest first) via `send`, removing each entry only
  * after a successful redelivery. Failures remain queued for a later retry.
+ *
+ * @example
+ * ```ts
+ * const result = await replayDeadLetterQueue({
+ *   queue: dlq,
+ *   send: (event) => handler(event),
+ *   limit: 10,
+ * });
+ * console.log(`${result.delivered} delivered, ${result.failed} failed`);
+ * ```
  */
 export async function replayDeadLetterQueue(
   options: ReplayDeadLetterQueueOptions,

@@ -25,6 +25,24 @@ const defaultSleep = (ms: number): Promise<void> =>
  * Runs `fn`, retrying on rejection up to `maxAttempts` total attempts with
  * exponential backoff between tries. Rethrows the last error if every
  * attempt fails.
+ *
+ * @example
+ * ```ts
+ * const data = await withRetry(() => fetchSanctionsList(), {
+ *   maxAttempts: 5,
+ *   baseMs: 250,
+ *   jitter: true,
+ * });
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Deterministic backoff in tests
+ * await withRetry(() => flakyCall(), {
+ *   maxAttempts: 2,
+ *   sleepFn: async () => {},
+ * });
+ * ```
  */
 export async function withRetry<T>(fn: () => Promise<T>, options: RetryOptions = {}): Promise<T> {
   const maxAttempts = options.maxAttempts ?? 3;

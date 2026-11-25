@@ -23,6 +23,17 @@ const MOCK_SOURCE = 'mock-watchlist-v1';
 // `Keypair.random().publicKey()` — regenerate the same way for fresh values.
 // Exported so tests can reference a known-flagged address without
 // duplicating magic strings across files.
+/**
+ * Placeholder map of flagged Stellar addresses to their (mock) source.
+ *
+ * @example
+ * ```ts
+ * import { MOCK_FLAGGED_ADDRESSES } from './mockProvider';
+ *
+ * const [address] = Object.keys(MOCK_FLAGGED_ADDRESSES);
+ * console.log(address); // e.g. "GCDVWDVSFNX43HOAIMRLPHJAQMPRRDZGRUE6DM6IFSV35BBNMGEZ662M"
+ * ```
+ */
 export const MOCK_FLAGGED_ADDRESSES: Record<string, string> = {
   GCDVWDVSFNX43HOAIMRLPHJAQMPRRDZGRUE6DM6IFSV35BBNMGEZ662M: MOCK_SOURCE,
   GD3AQAE6KUU4W4OMO6QU5LC5MA3E2IQETW6LR2BUHSQE4MNQYAZR6WPS: MOCK_SOURCE,
@@ -30,6 +41,16 @@ export const MOCK_FLAGGED_ADDRESSES: Record<string, string> = {
   GARQCALYBJTXSA4CLTI2CTIT2F777ON3KSSYHIIBRZWGTQ2LUFXE56C2: MOCK_SOURCE,
 };
 
+/**
+ * Options for {@link MockSanctionsProvider}.
+ *
+ * @example
+ * ```ts
+ * const options: MockSanctionsProviderOptions = {
+ *   flaggedAddresses: ['GCDVWDVSFNX43HOAIMRLPHJAQMPRRDZGRUE6DM6IFSV35BBNMGEZ662M'],
+ * };
+ * ```
+ */
 export interface MockSanctionsProviderOptions {
   /**
    * Custom flagged addresses, either loaded from a JSON file or passed
@@ -40,6 +61,21 @@ export interface MockSanctionsProviderOptions {
   flaggedAddresses?: Record<string, string> | string[] | string;
 }
 
+/**
+ * In-memory sanctions provider backed by placeholder mock data.
+ * DEVELOPMENT/TESTING ONLY — never a real compliance data source.
+ *
+ * @example
+ * ```ts
+ * import { MockSanctionsProvider } from './mockProvider';
+ *
+ * const provider = new MockSanctionsProvider();
+ * const result = await provider.checkAddress(
+ *   'GCDVWDVSFNX43HOAIMRLPHJAQMPRRDZGRUE6DM6IFSV35BBNMGEZ662M',
+ * );
+ * console.log(result.flagged); // true
+ * ```
+ */
 export class MockSanctionsProvider implements SanctionsProvider {
   private flaggedAddresses: Record<string, string>;
 
@@ -49,6 +85,14 @@ export class MockSanctionsProvider implements SanctionsProvider {
    * read. This is only safe to use at startup (e.g. building module-level
    * config); prefer {@link MockSanctionsProvider.fromFile} inside a request
    * path or anywhere else the blocking read would be a problem.
+   *
+   * @example
+   * ```ts
+   * // Direct addresses (no file I/O)
+   * const provider = new MockSanctionsProvider({
+   *   flaggedAddresses: { GCDVWDVSFNX43HOAIMRLPHJAQMPRRDZGRUE6DM6IFSV35BBNMGEZ662M: 'test' },
+   * });
+   * ```
    */
   constructor(options?: MockSanctionsProviderOptions) {
     this.flaggedAddresses = MockSanctionsProvider.loadFlaggedAddressesSync(options);
@@ -60,6 +104,14 @@ export class MockSanctionsProvider implements SanctionsProvider {
    * instead of blocking the event loop. Non-file-path options
    * (object/array/omitted) behave identically to the constructor and don't
    * need this — use `new MockSanctionsProvider(options)` for those.
+   *
+   * @example
+   * ```ts
+   * const provider = await MockSanctionsProvider.fromFile({
+   *   flaggedAddresses: './flagged-addresses.json',
+   * });
+   * const { flagged } = await provider.checkAddress(someAddress);
+   * ```
    */
   static async fromFile(options?: MockSanctionsProviderOptions): Promise<MockSanctionsProvider> {
     const provider = new MockSanctionsProvider();
@@ -139,6 +191,18 @@ export class MockSanctionsProvider implements SanctionsProvider {
     throw new Error('Flagged addresses must be an object or array');
   }
 
+  /**
+   * Check whether an address is flagged in the mock watchlist.
+   *
+   * @example
+   * ```ts
+   * const provider = new MockSanctionsProvider();
+   * const { flagged, source } = await provider.checkAddress(
+   *   'GCDVWDVSFNX43HOAIMRLPHJAQMPRRDZGRUE6DM6IFSV35BBNMGEZ662M',
+   * );
+   * // flagged === true, source === 'mock-watchlist-v1'
+   * ```
+   */
   async checkAddress(address: string): Promise<{ flagged: boolean; source: string }> {
     const source = this.flaggedAddresses[normalizeStellarAddress(address)];
     if (source) {

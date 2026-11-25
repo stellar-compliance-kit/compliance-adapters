@@ -156,6 +156,28 @@ function defaultSleep(ms: number): Promise<void> {
  *
  * All other errors (e.g. network failures, 5xx responses) are re-thrown
  * immediately without retrying.
+ *
+ * @example Basic usage with default options
+ * ```ts
+ * import { RateLimitedSanctionsProvider } from 'sanctions-oracle';
+ *
+ * const provider = new RateLimitedSanctionsProvider(new MyRestProvider());
+ * const result = await provider.checkAddress('GABC…');
+ * console.log(result.flagged, result.source);
+ * ```
+ *
+ * @example Custom retry and concurrency settings
+ * ```ts
+ * const provider = new RateLimitedSanctionsProvider(new MyRestProvider(), {
+ *   maxRetries:  5,
+ *   baseDelayMs: 500,
+ *   maxDelayMs:  30_000,
+ *   concurrency: 3,
+ * });
+ *
+ * // Fan out with Promise.all — the semaphore caps in-flight requests at 3.
+ * const results = await Promise.all(addresses.map((a) => provider.checkAddress(a)));
+ * ```
  */
 export class RateLimitedSanctionsProvider implements SanctionsProvider {
   private readonly inner: SanctionsProvider;
@@ -170,6 +192,21 @@ export class RateLimitedSanctionsProvider implements SanctionsProvider {
   /** Queue of resolvers waiting for a semaphore slot. */
   private readonly waiting: Array<() => void> = [];
 
+  /**
+   * Creates a new rate-limited wrapper around `inner`.
+   *
+   * @param inner - The provider to wrap; all calls are delegated to it.
+   * @param options - Retry, back-off and concurrency settings.
+   * @throws If `options.concurrency` is a finite value that is not positive.
+   *
+   * @example
+   * ```ts
+   * const provider = new RateLimitedSanctionsProvider(new MyRestProvider(), {
+   *   maxRetries: 4,
+   *   baseDelayMs: 250,
+   * });
+   * ```
+   */
   constructor(inner: SanctionsProvider, options: RateLimitOptions = {}) {
     this.inner = inner;
     this.maxRetries = options.maxRetries ?? 4;
@@ -191,6 +228,20 @@ export class RateLimitedSanctionsProvider implements SanctionsProvider {
    *
    * @throws The last error encountered after `maxRetries` attempts, or
    *   immediately on non-rate-limit errors.
+   *
+   * @example
+   * ```ts
+   * const provider = new RateLimitedSanctionsProvider(new MyRestProvider(), {
+   *   maxRetries: 3,
+   * });
+   *
+   * try {
+   *   const { flagged, source } = await provider.checkAddress('GABC…');
+   *   console.log(flagged ? `flagged by ${source}` : 'not flagged');
+   * } catch (err) {
+   *   console.error('check failed after retries:', err);
+   * }
+   * ```
    */
   async checkAddress(address: string): Promise<{ flagged: boolean; source: string }> {
     await this.acquireSemaphore();

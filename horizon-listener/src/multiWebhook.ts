@@ -7,6 +7,18 @@ import type { DeadLetterQueue } from './deadLetterQueue';
 import type { RawContractEvent } from './eventSource';
 import type { WebhookSender } from './webhook';
 
+/**
+ * A single fan-out destination for {@link MultiWebhookSender}.
+ *
+ * @example
+ * ```ts
+ * const target: WebhookTarget = {
+ *   name: 'siem',
+ *   sender: new HttpWebhookSender({ url: 'https://siem.example.com/events' }),
+ *   required: true,
+ * };
+ * ```
+ */
 export interface WebhookTarget {
   /** Human-readable name used in error messages (e.g. `"siem"`). */
   name: string;
@@ -25,6 +37,19 @@ export interface WebhookTarget {
   deadLetterQueue?: DeadLetterQueue;
 }
 
+/**
+ * Options accepted by the {@link MultiWebhookSender} constructor.
+ *
+ * @example
+ * ```ts
+ * const options: MultiWebhookSenderOptions = {
+ *   targets: [
+ *     { name: 'siem', sender: siemSender },
+ *     { name: 'audit', sender: auditSender, required: false },
+ *   ],
+ * };
+ * ```
+ */
 export interface MultiWebhookSenderOptions {
   targets: WebhookTarget[];
 }
@@ -32,6 +57,19 @@ export interface MultiWebhookSenderOptions {
 /**
  * Thrown by {@link MultiWebhookSender.send} when one or more required targets
  * failed. `failures` lists every failed target (required and optional).
+ *
+ * @example
+ * ```ts
+ * try {
+ *   await sender.send(event);
+ * } catch (err) {
+ *   if (err instanceof MultiWebhookDeliveryError) {
+ *     for (const failure of err.failures) {
+ *       console.error(failure.target, failure.required, failure.error.message);
+ *     }
+ *   }
+ * }
+ * ```
  */
 export class MultiWebhookDeliveryError extends Error {
   constructor(
@@ -53,10 +91,30 @@ export class MultiWebhookDeliveryError extends Error {
  * - A failed **required** target is dead-lettered (if it has a DLQ) and `send`
  *   rejects with {@link MultiWebhookDeliveryError}, so the event is not
  *   acknowledged.
+ *
+ * @example
+ * ```ts
+ * const sender = new MultiWebhookSender({
+ *   targets: [
+ *     { name: 'siem', sender: siemSender },
+ *     { name: 'audit', sender: auditSender, required: false, deadLetterQueue: auditDlq },
+ *   ],
+ * });
+ *
+ * await sender.send(event);
+ * ```
  */
 export class MultiWebhookSender implements WebhookSender {
   private readonly targets: WebhookTarget[];
 
+  /**
+   * @example
+   * ```ts
+   * const sender = new MultiWebhookSender({
+   *   targets: [{ name: 'siem', sender: new HttpWebhookSender({ url }) }],
+   * });
+   * ```
+   */
   constructor(options: MultiWebhookSenderOptions) {
     if (!options.targets || options.targets.length === 0) {
       throw new Error('horizon-listener: MultiWebhookSender requires at least one target');
@@ -71,6 +129,19 @@ export class MultiWebhookSender implements WebhookSender {
     this.targets = options.targets;
   }
 
+  /**
+   * Deliver `event` to every target concurrently.
+   *
+   * @example
+   * ```ts
+   * await sender.send({
+   *   contractId: 'C...',
+   *   ledger: 12345,
+   *   topics: ['transfer'],
+   *   value: { amount: '100' },
+   * });
+   * ```
+   */
   async send(event: RawContractEvent): Promise<void> {
     const results = await Promise.allSettled(this.targets.map((target) => target.sender.send(event)));
 

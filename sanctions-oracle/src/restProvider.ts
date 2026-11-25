@@ -71,8 +71,24 @@ export interface RestSanctionsProviderOptions {
  *
  * Calls a configurable HTTP endpoint per address and maps the JSON
  * response to the `{ flagged, source }` shape the sync engine expects.
+ *
+ * @example
+ * ```ts
+ * import { RestSanctionsProvider } from 'sanctions-oracle';
+ *
+ * const provider = new RestSanctionsProvider({
+ *   apiBaseUrl: 'https://api.watchlist-provider.com',
+ *   apiKey: process.env.WATCHLIST_API_KEY!,
+ * });
+ *
+ * const { flagged, source } = await provider.checkAddress(
+ *   'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+ * );
+ * console.log(flagged, source);
+ * ```
  */
 export class RestSanctionsProvider implements SanctionsProvider {
+=======
   private readonly apiBaseUrl: string;
   private readonly apiKey: string;
   private readonly timeoutMs: number;
@@ -93,6 +109,33 @@ export class RestSanctionsProvider implements SanctionsProvider {
     this.propagateTraceContext = options.propagateTraceContext !== false;
   }
 
+  /**
+   * Check a single Stellar address against the watchlist REST API.
+   *
+   * The address is normalized to its canonical spelling before the request
+   * is issued.  Network failures and non-2xx responses are re-thrown so the
+   * caller can decide whether to fail open or fail closed.
+   *
+   * @param rawAddress - Stellar address to check (any casing / padding).
+   * @returns `{ flagged, source }` where `source` is the comma-joined list
+   *   names reported by the API, or `'external-watchlist-api'` when empty.
+   * @throws If the request times out, fails, or returns a non-2xx status.
+   *
+   * @example
+   * ```ts
+   * const provider = new RestSanctionsProvider({
+   *   apiBaseUrl: 'https://api.watchlist-provider.com',
+   *   apiKey: process.env.WATCHLIST_API_KEY!,
+   * });
+   *
+   * const result = await provider.checkAddress(
+   *   'GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF',
+   * );
+   * if (result.flagged) {
+   *   console.warn(`Address flagged by ${result.source}`);
+   * }
+   * ```
+   */
   async checkAddress(rawAddress: string): Promise<{ flagged: boolean; source: string }> {
     // Query the provider with the canonical spelling so padded / lowercase
     // input cannot miss a match.

@@ -12,6 +12,19 @@ import { assertBareDomain } from './challenge';
  * Thrown by {@link authenticateWithSep10} when any step of the client flow
  * fails. The {@link Sep10ClientError.code | code} field is a stable string
  * identifying the failure category.
+ *
+ * @example
+ * ```ts
+ * import { authenticateWithSep10, Sep10ClientError } from 'sep10-auth';
+ *
+ * try {
+ *   await authenticateWithSep10({ authEndpoint, keypair, homeDomain });
+ * } catch (error) {
+ *   if (error instanceof Sep10ClientError && error.code === 'NETWORK_MISMATCH') {
+ *     console.error('Wrong network configured for this anchor');
+ *   }
+ * }
+ * ```
  */
 export class Sep10ClientError extends Error {
   /** Stable error code identifying the failure category. */
@@ -38,6 +51,15 @@ export class Sep10ClientError extends Error {
  * | `INVALID_SERVER_SIGNATURE` | The challenge transaction is not signed by the server, or the home/web-auth domain does not match. |
  * | `ACCOUNT_MISMATCH` | The challenge was built for a different account than the one requested. |
  * | `TOKEN_EXCHANGE_FAILED` | The `POST /auth` request returned a non-200 status. |
+ *
+ * @example
+ * ```ts
+ * import type { Sep10ClientErrorCode } from 'sep10-auth';
+ *
+ * function isRetryable(code: Sep10ClientErrorCode): boolean {
+ *   return code === 'CHALLENGE_REQUEST_FAILED' || code === 'TOKEN_EXCHANGE_FAILED';
+ * }
+ * ```
  */
 export type Sep10ClientErrorCode =
   | 'INVALID_KEYPAIR'
@@ -50,6 +72,22 @@ export type Sep10ClientErrorCode =
   | 'ACCOUNT_MISMATCH'
   | 'TOKEN_EXCHANGE_FAILED';
 
+/**
+ * Options accepted by {@link authenticateWithSep10}.
+ *
+ * @example
+ * ```ts
+ * import { Keypair, Networks } from '@stellar/stellar-sdk';
+ * import type { AuthenticateWithSep10Options } from 'sep10-auth';
+ *
+ * const options: AuthenticateWithSep10Options = {
+ *   authEndpoint: 'https://anchor.example.com/auth',
+ *   keypair: Keypair.fromSecret(process.env.CLIENT_SECRET!),
+ *   homeDomain: 'anchor.example.com',
+ *   networkPassphrase: Networks.PUBLIC,
+ * };
+ * ```
+ */
 export interface AuthenticateWithSep10Options {
   /**
    * Full URL of the SEP-10 auth endpoint, e.g. `https://example.com/auth`.
@@ -144,6 +182,23 @@ export interface AuthenticateWithSep10Options {
  * // fetch('https://anchor.example.com/transactions', {
  * //   headers: { Authorization: `Bearer ${token}` },
  * // });
+ * ```
+ *
+ * @example Client-domain flow with a custom fetch and logger
+ * ```ts
+ * import { Keypair, Networks } from '@stellar/stellar-sdk';
+ * import { authenticateWithSep10 } from 'sep10-auth';
+ *
+ * const token = await authenticateWithSep10({
+ *   authEndpoint: 'https://anchor.example.com/auth',
+ *   keypair: Keypair.fromSecret(process.env.CLIENT_SECRET!),
+ *   homeDomain: 'anchor.example.com',
+ *   clientDomain: 'wallet.example.com',
+ *   serverAccountId: 'G...SERVER_SIGNING_KEY',
+ *   networkPassphrase: Networks.PUBLIC,
+ *   fetch: myInstrumentedFetch,
+ *   logger: console,
+ * });
  * ```
  *
  * @throws {@link Sep10ClientError} on any failure, with a stable `code` field

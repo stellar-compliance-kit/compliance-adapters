@@ -25,6 +25,12 @@ export type Outcome = 'success' | 'failure' | 'cancelled';
 /**
  * Escape a label value per the Prometheus exposition format:
  * `\` → `\\`, `"` → `\"`, newline → `\n`.
+ *
+ * @example
+ * ```ts
+ * escapeLabelValue('rpc"poll'); // => 'rpc\\"poll'
+ * escapeLabelValue('a\nb');     // => 'a\\nb'
+ * ```
  */
 export function escapeLabelValue(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/"/g, '\\"');
@@ -33,6 +39,11 @@ export function escapeLabelValue(value: string): string {
 /**
  * Escape HELP text per the Prometheus exposition format:
  * `\` → `\\`, newline → `\n`.
+ *
+ * @example
+ * ```ts
+ * escapeHelp('Total requests\nby phase'); // => 'Total requests\\nby phase'
+ * ```
  */
 export function escapeHelp(value: string): string {
   return value.replace(/\\/g, '\\\\').replace(/\n/g, '\\n');
@@ -69,10 +80,24 @@ export interface Gauge<Phase extends string> {
   get(phase: Phase): number;
 }
 
-/** Default cap for distinct label series per metric before overflow folding. */
+/**
+ * Default cap for distinct label series per metric before overflow folding.
+ *
+ * @example
+ * ```ts
+ * new MetricsRegistry({ phases: ['rpc_poll'], prefix: 'x', maxSeries: DEFAULT_MAX_SERIES });
+ * ```
+ */
 export const DEFAULT_MAX_SERIES = 1000;
 
-/** Label value used for the folded overflow series. */
+/**
+ * Label value used for the folded overflow series.
+ *
+ * @example
+ * ```ts
+ * registry.counter.get(OVERFLOW_LABEL as Phase, 'success');
+ * ```
+ */
 export const OVERFLOW_LABEL = '__overflow__';
 
 /** Warns at most once per registry when the series cap is first exceeded. */
@@ -133,6 +158,15 @@ class DefaultCounter<Phase extends string> implements Counter<Phase> {
 /**
  * Default bucket upper-bounds (ms).  They cover sub-millisecond fast paths all
  * the way through 10 s network timeouts typical for RPC calls.
+ *
+ * @example
+ * ```ts
+ * new MetricsRegistry({
+ *   phases: ['rpc_poll'],
+ *   prefix: 'horizon_listener',
+ *   histogramBuckets: DEFAULT_HISTOGRAM_BUCKETS,
+ * });
+ * ```
  */
 export const DEFAULT_HISTOGRAM_BUCKETS = [5, 25, 100, 250, 500, 1000, 2500, 5000, 10000];
 
@@ -279,6 +313,21 @@ export interface MetricsRegistryOptions<Phase extends string> {
  *
  * Pass an instance to a package's options to enable recording. Omit it
  * entirely to use the built-in no-op registry — there is zero overhead.
+ *
+ * @example
+ * ```ts
+ * type Phase = 'rpc_poll' | 'event_relay';
+ * const registry = new MetricsRegistry<Phase>({
+ *   phases: ['rpc_poll', 'event_relay'],
+ *   prefix: 'horizon_listener',
+ * });
+ *
+ * registry.counter.inc('rpc_poll', 'success');
+ * registry.histogram.observe('rpc_poll', 42);
+ * registry.gauge.set('event_relay', 3);
+ *
+ * const body = registry.expose(); // Prometheus text format
+ * ```
  */
 export class MetricsRegistry<Phase extends string> {
   readonly counter: Counter<Phase>;
@@ -369,6 +418,15 @@ export class MetricsRegistry<Phase extends string> {
 /**
  * A no-op registry that discards all observations.
  * Used as the default so callers that don't provide a registry pay no cost.
+ *
+ * @example
+ * ```ts
+ * type Phase = 'rpc_poll';
+ * const registry: AnyMetricsRegistry<Phase> = new NoopMetricsRegistry<Phase>();
+ *
+ * registry.counter.inc('rpc_poll', 'success'); // no-op
+ * registry.expose();                           // => ''
+ * ```
  */
 export class NoopMetricsRegistry<Phase extends string> {
   readonly counter: Counter<Phase> = new NoopCounter<Phase>();
@@ -380,5 +438,18 @@ export class NoopMetricsRegistry<Phase extends string> {
   }
 }
 
+/**
+ * Union of the real and no-op registries, so consumers can accept either.
+ *
+ * @example
+ * ```ts
+ * function record(registry: AnyMetricsRegistry<'rpc_poll'>): void {
+ *   registry.counter.inc('rpc_poll', 'success');
+ * }
+ *
+ * record(new MetricsRegistry({ phases: ['rpc_poll'], prefix: 'x' }));
+ * record(new NoopMetricsRegistry());
+ * ```
+ */
 export type AnyMetricsRegistry<Phase extends string> =
   MetricsRegistry<Phase> | NoopMetricsRegistry<Phase>;

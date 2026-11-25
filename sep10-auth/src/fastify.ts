@@ -31,6 +31,23 @@ export interface Sep10FastifyOptions extends Sep10MiddlewareOptions {
    * `false` to only decorate `fastify.sep10Authenticate` and attach it to
    * individual routes as a `preHandler`.
    * @default true
+   * @example
+   * ```ts
+   * import Fastify from 'fastify';
+   * import { sep10Plugin } from 'sep10-auth/fastify';
+   *
+   * const app = Fastify();
+   * // Only decorate `sep10Authenticate`; protect routes individually.
+   * await app.register(sep10Plugin, {
+   *   serverAccountId: serverKeypair.publicKey(),
+   *   homeDomains: 'example.com',
+   *   webAuthDomain: 'example.com',
+   *   global: false,
+   * });
+   * app.get('/status', { preHandler: app.sep10Authenticate }, async (request) => ({
+   *   address: request.stellarAddress,
+   * }));
+   * ```
    */
   global?: boolean;
 }
@@ -54,6 +71,24 @@ export interface Sep10FastifyOptions extends Sep10MiddlewareOptions {
  *   webAuthDomain: 'example.com',
  * });
  * app.get('/status', async (request) => ({ address: request.stellarAddress }));
+ * ```
+ *
+ * @example
+ * ```ts
+ * // Protect a single route instead of the whole scope.
+ * import Fastify from 'fastify';
+ * import { sep10Plugin } from 'sep10-auth/fastify';
+ *
+ * const app = Fastify();
+ * await app.register(sep10Plugin, {
+ *   serverAccountId: serverKeypair.publicKey(),
+ *   homeDomains: 'example.com',
+ *   webAuthDomain: 'example.com',
+ *   global: false,
+ * });
+ * app.get('/me', { preHandler: app.sep10Authenticate }, async (request) => ({
+ *   address: request.stellarAddress,
+ * }));
  * ```
  */
 export const sep10Plugin: FastifyPluginAsync<Sep10FastifyOptions> = fp(
@@ -119,4 +154,20 @@ export const sep10Plugin: FastifyPluginAsync<Sep10FastifyOptions> = fp(
   { name: 'sep10-auth', fastify: '>=4.0.0' },
 );
 
+/**
+ * Default export of {@link sep10Plugin}, for `import sep10Plugin from 'sep10-auth/fastify'`.
+ *
+ * @example
+ * ```ts
+ * import Fastify from 'fastify';
+ * import sep10Plugin from 'sep10-auth/fastify';
+ *
+ * const app = Fastify();
+ * await app.register(sep10Plugin, {
+ *   serverAccountId: serverKeypair.publicKey(),
+ *   homeDomains: 'example.com',
+ *   webAuthDomain: 'example.com',
+ * });
+ * ```
+ */
 export default sep10Plugin;

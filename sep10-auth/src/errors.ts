@@ -24,6 +24,25 @@
  * | `missing_transaction`      | 400  | router POST     | Required `transaction` body parameter absent               |
  * | `transaction_too_large`    | 400  | router POST     | `transaction` XDR exceeds the configured max length        |
  * | `invalid_transaction`      | 400  | router POST     | Challenge XDR failed SEP-10 verification                   |
+ *
+ * @example
+ * ```ts
+ * import type { Sep10ErrorCode } from 'sep10-auth';
+ *
+ * function httpStatusFor(code: Sep10ErrorCode): number {
+ *   switch (code) {
+ *     case 'rate_limit_exceeded':
+ *       return 429;
+ *     case 'missing_account':
+ *     case 'invalid_account':
+ *       return 400;
+ *     default:
+ *       return 401;
+ *   }
+ * }
+ *
+ * console.log(httpStatusFor('invalid_token')); // 401
+ * ```
  */
 export type Sep10ErrorCode =
   // middleware
@@ -62,6 +81,17 @@ export type Sep10ErrorCode =
  *   "details": { "reason": "Transaction has expired" }
  * }
  * ```
+ *
+ * @example
+ * ```ts
+ * import type { Sep10ErrorBody } from 'sep10-auth';
+ *
+ * const res = await fetch('/auth?account=GABC...');
+ * if (!res.ok) {
+ *   const body = (await res.json()) as Sep10ErrorBody;
+ *   console.error(`[${body.code}] ${body.error}`, body.details);
+ * }
+ * ```
  */
 export interface Sep10ErrorBody {
   /**
@@ -89,6 +119,29 @@ export interface Sep10ErrorBody {
  * @param error   Human-readable message.
  * @param code    Machine-readable {@link Sep10ErrorCode}.
  * @param details Optional structured context.
+ *
+ * @example
+ * ```ts
+ * import { makeErrorBody } from 'sep10-auth';
+ *
+ * const body = makeErrorBody(
+ *   'Account parameter is required',
+ *   'missing_account',
+ * );
+ * // { error: 'Account parameter is required', code: 'missing_account' }
+ * ```
+ *
+ * @example
+ * ```ts
+ * import { makeErrorBody } from 'sep10-auth';
+ *
+ * const body = makeErrorBody(
+ *   'Too many requests',
+ *   'rate_limit_exceeded',
+ *   { retryAfter: 30 },
+ * );
+ * // { error: 'Too many requests', code: 'rate_limit_exceeded', details: { retryAfter: 30 } }
+ * ```
  */
 export function makeErrorBody(
   error: string,

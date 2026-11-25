@@ -36,6 +36,12 @@ interface CacheEntry {
 /**
  * Optional cache layer for SanctionsProvider results.
  * Avoids redundant provider calls for addresses checked recently.
+ *
+ * @example
+ * ```ts
+ * const cache = new ProviderResultCache(60_000, 1000);
+ * const result = await cache.getOrLoad(address, () => provider.checkAddress(address));
+ * ```
  */
 export class ProviderResultCache {
   private cache: Map<string, CacheEntry> = new Map();
@@ -48,6 +54,12 @@ export class ProviderResultCache {
    * @param ttlMs Time-to-live for cached results in milliseconds
    * @param maxEntries Optional maximum number of entries to retain. When set,
    * the least-recently-used entry is evicted once the cache would exceed this size.
+   *
+   * @example
+   * ```ts
+   * // 1-hour TTL, at most 500 entries
+   * const cache = new ProviderResultCache(3_600_000, 500);
+   * ```
    */
   constructor(ttlMs: number = 3600000, maxEntries?: number) {
     this.ttlMs = ttlMs;
@@ -57,6 +69,12 @@ export class ProviderResultCache {
   /**
    * Get a cached result if available and not expired.
    * @returns The cached result, or undefined if not found or expired
+   *
+   * @example
+   * ```ts
+   * const cached = cache.get(address);
+   * if (cached) console.log(cached.flagged);
+   * ```
    */
   get(address: string): CheckResult | undefined {
     const entry = this.cache.get(address);
@@ -77,6 +95,11 @@ export class ProviderResultCache {
 
   /**
    * Store a result in the cache.
+   *
+   * @example
+   * ```ts
+   * cache.set(address, { flagged: true, source: 'ofac' });
+   * ```
    */
   set(address: string, result: CheckResult): void {
     this.cache.delete(address);
@@ -97,6 +120,11 @@ export class ProviderResultCache {
   /**
    * Remove a single cached entry, e.g. after an operator determines it's stale.
    * @returns Whether an entry was present and removed.
+   *
+   * @example
+   * ```ts
+   * const removed = cache.delete(address);
+   * ```
    */
   delete(address: string): boolean {
     return this.cache.delete(address);
@@ -106,6 +134,11 @@ export class ProviderResultCache {
    * Retrieve a cached result or coalesce concurrent misses behind a single
    * in-flight promise, so concurrent lookups for the same address do not race to
    * populate the cache with duplicate provider calls.
+   *
+   * @example
+   * ```ts
+   * const result = await cache.getOrLoad(address, () => provider.checkAddress(address));
+   * ```
    */
   async getOrLoad(address: string, load: () => Promise<CheckResult>): Promise<CheckResult> {
     const cached = this.get(address);
@@ -147,6 +180,11 @@ export class ProviderResultCache {
 
   /**
    * Clear all cached entries.
+   *
+   * @example
+   * ```ts
+   * cache.clear();
+   * ```
    */
   clear(): void {
     this.cache.clear();
@@ -303,7 +341,15 @@ export interface FeeEstimate {
 
 const STROOPS_PER_XLM = BigInt(10_000_000);
 
-/** Formats a stroop amount as an exact XLM decimal string. */
+/**
+ * Formats a stroop amount as an exact XLM decimal string.
+ *
+ * @example
+ * ```ts
+ * stroopsToXlm(BigInt(10_000_000)); // '1.0000000'
+ * stroopsToXlm(BigInt(15_000_000)); // '1.5000000'
+ * ```
+ */
 export function stroopsToXlm(stroops: bigint): string {
   const negative = stroops < BigInt(0);
   const abs = negative ? -stroops : stroops;
@@ -460,6 +506,27 @@ async function executeConcurrent<T>(
   }
 }
 
+/**
+ * Checks a list of addresses against a sanctions provider and writes the
+ * flagged ones to an on-chain denylist via the supplied writer.
+ *
+ * @example
+ * ```ts
+ * import { syncSanctionsToDenylist, MockSanctionsProvider } from 'sanctions-oracle';
+ *
+ * const result = await syncSanctionsToDenylist({
+ *   provider: new MockSanctionsProvider(),
+ *   addresses: ['GABCDEF...'],
+ *   writer: {
+ *     async addToDenylist(address) {
+ *       return { hash: 'deadbeef' };
+ *     },
+ *   },
+ *   dryRun: true,
+ * });
+ * console.log(result.flagged, result.written);
+ * ```
+ */
 export async function syncSanctionsToDenylist(options: SyncOptions): Promise<SyncResult> {
   const {
     provider,
@@ -837,6 +904,17 @@ export interface RpcFeeEstimatorOptions {
  * `add_to_denylist` call via Soroban RPC and returns the prepared
  * transaction's total fee (inclusion + resource fee) in stroops.
  * Nothing is signed or submitted.
+ *
+ * @example
+ * ```ts
+ * const feeEstimator = createRpcFeeEstimator({
+ *   rpcUrl: 'https://soroban-testnet.stellar.org',
+ *   networkPassphrase: 'Test SDF Network ; September 2015',
+ *   contractId: 'CXXXX...',
+ *   sourcePublicKey: 'GXXXX...',
+ * });
+ * const stroops = await feeEstimator('GABCDEF...');
+ * ```
  */
 export function createRpcFeeEstimator(
   options: RpcFeeEstimatorOptions,
@@ -894,534 +972,11 @@ export interface RpcDenylistWriterOptions {
   logger?: Logger;
 }
 
-// Kept behind the DenylistWriter interface (rather than called directly
-// from syncSanctionsToDenylist) so tests can inject a fake writer instead
-// of touching a live RPC endpoint.
-export function createRpcDenylistWriter(options: RpcDenylistWriterOptions): DenylistWriter & {
-  addToDenylistWithSource?: (
-    address: string,
-    source: string,
-  ) => Promise<{ hash: string; auditLog?: AuditLogEntry }>;
-  removeFromDenylist: (address: string) => Promise<{ hash: string }>;
-  removeFromDenylistWithSource: (
-    address: string,
-    source: string,
-  ) => Promise<{ hash: string; auditLog?: AuditLogEntry }>;
-} {
-  const {
-    rpcUrl,
-    networkPassphrase,
-    contractId,
-    sourceKeypair,
-    signer: signerOption,
-    feeSource: feeSourceOption,
-    auditLogger,
-    maxRetries = 3,
-    backoffOptions,
-    logger = noopLogger,
-  } = options;
-  const authority = signerOption ?? sourceKeypair;
-  if (!authority) {
-    throw new Error('sanctions-oracle: createRpcDenylistWriter requires a signer or sourceKeypair');
-  }
-  const signer = toSigner(authority);
-  const feeSigner = feeSourceOption ? toSigner(feeSourceOption) : undefined;
-  const server = new rpc.Server(rpcUrl, { allowHttp: rpcUrl.startsWith('http://') });
-  const contract = new Contract(contractId);
-
-  // Shared by both public methods below so the retry/backoff behavior around
-  // sendTransaction can't drift between the audited and non-audited paths.
-  async function buildPrepareSignAndSend(
-    address: string,
-    method: 'add_to_denylist' | 'remove_from_denylist' = 'add_to_denylist',
-  ): Promise<{ hash: string }> {
-    const account = await server.getAccount(signer.publicKey());
-
-    const tx = new TransactionBuilder(account, {
-      fee: BASE_FEE,
-      networkPassphrase,
-    })
-      .addOperation(contract.call(method, nativeToScVal(address, { type: 'address' })))
-      .setTimeout(30)
-      .build();
-
-    let prepared;
-    try {
-      prepared = await server.prepareTransaction(tx);
-    } catch (error) {
-      const err = error instanceof Error ? error.message : String(error);
-      throw new Error(`Failed to prepare transaction (simulation error): ${err}`);
-    }
-
-    await signTransaction(prepared, signer);
-
-    let envelope: Transaction | FeeBumpTransaction = prepared;
-    if (feeSigner) {
-      envelope = TransactionBuilder.buildFeeBumpTransaction(
-        feeSigner.publicKey(),
-        BASE_FEE,
-        prepared,
-        networkPassphrase,
-      );
-      await signTransaction(envelope, feeSigner);
-    }
-
-    let lastError;
-    for (let attempt = 0; attempt < maxRetries; attempt++) {
-      try {
-        const sendResult = await server.sendTransaction(envelope);
-        return { hash: sendResult.hash };
-      } catch (error) {
-        lastError = error;
-        if (attempt < maxRetries - 1) {
-          const delayMs = computeBackoffDelayMs(attempt, backoffOptions);
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
-        }
-      }
-    }
-
-    const err = lastError instanceof Error ? lastError.message : String(lastError);
-    throw new Error(`Failed to send transaction after ${maxRetries} attempts: ${err}`);
-  }
-
-  // Shared by the add and remove audited paths so audit-failure handling
-  // can't drift between them.
-  async function writeAuditEntry(auditEntry: AuditLogEntry): Promise<void> {
-    const { address, txHash: hash } = auditEntry;
-    if (auditLogger) {
-      try {
-        await auditLogger(auditEntry);
-      } catch (error) {
-        // The on-chain write above already succeeded — an audit-logging
-        // failure must not fail this address's write or propagate up
-        // through syncSanctionsToDenylist's write loop.
-        logger.error?.('sanctions-oracle: audit logger failed after successful denylist write', {
-          address,
-          txHash: hash,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-  }
-
-  return {
-    async addToDenylist(address: string): Promise<{ hash: string }> {
-      return buildPrepareSignAndSend(address);
-    },
-    async addToDenylistWithSource(
-      address: string,
-      source: string,
-    ): Promise<{ hash: string; auditLog?: AuditLogEntry }> {
-      const { hash } = await buildPrepareSignAndSend(address);
-
-      const auditEntry: AuditLogEntry = {
-        address,
-        timestamp: new Date().toISOString(),
-        source,
-        txHash: hash,
-      };
-      await writeAuditEntry(auditEntry);
-
-      return { hash, auditLog: auditEntry };
-    },
-    async removeFromDenylist(address: string): Promise<{ hash: string }> {
-      return buildPrepareSignAndSend(address, 'remove_from_denylist');
-    },
-    async removeFromDenylistWithSource(
-      address: string,
-      source: string,
-    ): Promise<{ hash: string; auditLog?: AuditLogEntry }> {
-      const { hash } = await buildPrepareSignAndSend(address, 'remove_from_denylist');
-
-      const auditEntry: AuditLogEntry = {
-        address,
-        action: 'remove',
-        timestamp: new Date().toISOString(),
-        source,
-        txHash: hash,
-      };
-      await writeAuditEntry(auditEntry);
-
-      return { hash, auditLog: auditEntry };
-    },
-  };
-}
-
-export interface CliArgs {
-  addressesPath?: string;
-  dryRun: boolean;
-  contractId?: string;
-  rpcUrl?: string;
-  networkPassphrase?: string;
-  secretKey?: string;
-  help?: boolean;
-  /** Path to a CSV file of flagged addresses, used to build a CsvSanctionsProvider. */
-  csvPath?: string;
-  /** Path to a module exporting a SanctionsProvider-compatible default export. */
-  providerModulePath?: string;
-  /** Wrap the selected provider with RateLimitedSanctionsProvider's backoff/concurrency protection. */
-  rateLimit?: boolean;
-  /** Opt in to delisting: remove denylist addresses the provider has cleared. Requires `denylistSnapshotPath`. */
-  reconcile?: boolean;
-  /** Path to a JSON array of the addresses currently on the denylist (the last snapshot). */
-  denylistSnapshotPath?: string;
-  /** Print only the JSON SyncResult on stdout; route all logs to stderr. */
-  json?: boolean;
-  /** Path to an append-only JSONL file that records every denylist write. */
-  auditLogPath?: string;
-  /** Path to a checkpoint file; addresses completed by a prior run are skipped. */
-  checkpointPath?: string;
-}
-
-/** Logger that writes every level to stderr, keeping stdout clean for `--json`. */
-const stderrLogger: Logger = {
-  debug: (...args: unknown[]) => console.error(...args),
-  info: (...args: unknown[]) => console.error(...args),
-  warn: (...args: unknown[]) => console.error(...args),
-  error: (...args: unknown[]) => console.error(...args),
-};
-
 /**
- * Returns a copy of `args` safe for logging, with `secretKey` masked.
- * Use this instead of logging the raw `CliArgs` object.
- */
-export function toSafeLogString(args: CliArgs): string {
-  return JSON.stringify({ ...args, secretKey: args.secretKey ? '[REDACTED]' : undefined });
-}
-
-export function parseArgs(argv: string[]): CliArgs {
-  const args: CliArgs = { dryRun: false };
-  const readValue = (flag: string, index: number): string => {
-    const value = argv[index + 1];
-    if (value === undefined || value.startsWith('-')) {
-      throw new Error(`Missing value for ${flag}`);
-    }
-    return value;
-  };
-
-  for (let i = 0; i < argv.length; i += 1) {
-    const arg = argv[i];
-    switch (arg) {
-      case '--addresses':
-        args.addressesPath = readValue(arg, i);
-        i += 1;
-        break;
-      case '--dry-run':
-        args.dryRun = true;
-        break;
-      case '--contract-id':
-        args.contractId = readValue(arg, i);
-        i += 1;
-        break;
-      case '--rpc-url':
-        args.rpcUrl = readValue(arg, i);
-        i += 1;
-        break;
-      case '--network-passphrase':
-        args.networkPassphrase = readValue(arg, i);
-        i += 1;
-        break;
-      case '--secret-key':
-        args.secretKey = readValue(arg, i);
-        i += 1;
-        break;
-      case '--csv':
-        args.csvPath = readValue(arg, i);
-        i += 1;
-        break;
-      case '--provider-module':
-        args.providerModulePath = readValue(arg, i);
-        i += 1;
-        break;
-      case '--rate-limit':
-        args.rateLimit = true;
-        break;
-      case '--reconcile':
-        args.reconcile = true;
-        break;
-      case '--max-duration': {
-        const ms = Number(readValue(arg, i));
-        if (!Number.isFinite(ms) || ms <= 0) {
-          throw new Error('--max-duration must be a positive number of milliseconds');
-        }
-        args.maxDurationMs = ms;
-        i += 1;
-        break;
-      }
-      case '--denylist-snapshot':
-        args.denylistSnapshotPath = readValue(arg, i);
-        i += 1;
-        break;
-      case '--json':
-        args.json = true;
-        break;
-      case '--audit-log':
-        args.auditLogPath = readValue(arg, i);
-        i += 1;
-        break;
-      case '--checkpoint':
-        args.checkpointPath = readValue(arg, i);
-        i += 1;
-        break;
-      case '--help':
-      case '-h':
-        args.help = true;
-        break;
-      default:
-        break;
-    }
-  }
-  return args;
-}
-
-function printHelp(): void {
-  // CLI-only: help text is written straight to stdout by convention, not routed
-  // through an injectable Logger.
-  // eslint-disable-next-line no-console
-  console.log(`
-sanctions-oracle sync - Synchronize sanctions data to a Soroban denylist
-
-USAGE:
-  sanctions-oracle sync [OPTIONS]
-
-OPTIONS:
-  --addresses <path>          Path to JSON file containing array of addresses to check
-  --contract-id <id>          Soroban contract ID (required for live sync)
-  --rpc-url <url>             Soroban RPC endpoint URL (required for live sync)
-  --network-passphrase <str>  Network passphrase (required for live sync)
-  --secret-key <key>          Source account secret key (required for live sync unless
-                               SANCTIONS_ORACLE_SECRET_KEY is set; discouraged outside
-                               local testing since it is visible in shell history/process lists)
-  --csv <path>                Use a CsvSanctionsProvider backed by the given CSV file
-  --provider-module <path>    Dynamically import a module whose default export is a
-                               SanctionsProvider to use instead of the mock/CSV provider
-  --rate-limit                Wrap the selected provider with RateLimitedSanctionsProvider
-  --reconcile                 Opt in to delisting: remove addresses from the denylist once the
-                               provider no longer flags them (requires --denylist-snapshot);
-                               combine with --dry-run to preview the planned removals
-  --max-duration <ms>         Hard deadline for the run. When it elapses no new checks start,
-                               in-flight checks finish, results are saved and the process
-                               exits with code 3 (EXIT_CODE_DEADLINE_EXCEEDED)
-  --denylist-snapshot <path>  Path to JSON file containing an array of the addresses currently
-                               on the denylist
-  --dry-run                   Preview output without writing to the contract
-  --json                      Print only the JSON SyncResult on stdout; logs go to stderr
-  --audit-log <path>          Append one JSON line per denylist write to <path>
-  --checkpoint <path>         Persist completed addresses to <path> and skip them on re-run
-  --help, -h                  Show this help message
-
-ENVIRONMENT:
-  SANCTIONS_ORACLE_SECRET_KEY  Source account secret key (preferred over --secret-key)
-  SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY  Optional separate fee account; when set every
-                               transaction is wrapped in a fee-bump paid by this account
-
-EXAMPLES:
-  # Dry-run mode: check addresses without writing
-  sanctions-oracle sync --addresses addresses.json --dry-run
-
-  # Live mode: sync flagged addresses to contract (preferred, via env var)
-  SANCTIONS_ORACLE_SECRET_KEY=SBXXXX sanctions-oracle sync \\
-    --addresses addresses.json \\
-    --contract-id CXXXX \\
-    --rpc-url https://soroban-testnet.stellar.org \\
-    --network-passphrase "Test SDF Network ; September 2015"
-  `);
-}
-
-export async function runCli(argv?: string[]): Promise<void> {
-  // The CLI entrypoint uses consoleLogger so dry-run output and errors are
-  // visible by default; programmatic callers should inject their own logger.
-  const processArgv = argv ?? process.argv.slice(2);
-  const args = parseArgs(processArgv);
-  // --json reserves stdout for the single JSON SyncResult.
-  const logger = args.json ? stderrLogger : consoleLogger;
-
-  if (args.help) {
-    printHelp();
-    return;
-  }
-
-  if (!args.addressesPath) {
-    logger.error?.('sanctions-oracle: Missing required flag: --addresses <path-to-json-array>');
-    process.exitCode = 1;
-    return;
-  }
-
-  let addresses: string[];
-  try {
-    const parsed = JSON.parse(fs.readFileSync(args.addressesPath, 'utf8'));
-    if (!Array.isArray(parsed)) {
-      throw new Error('Addresses file must contain a JSON array');
-    }
-    if (!parsed.every((item) => typeof item === 'string')) {
-      throw new Error('All entries in the addresses array must be strings');
-    }
-    const emptyStrings = parsed.filter((addr) => addr === '');
-    if (emptyStrings.length > 0) {
-      throw new Error(`Addresses file contains ${emptyStrings.length} empty string entries`);
-    }
-    const uniqueAddresses = Array.from(new Set(parsed.map(normalizeStellarAddress)));
-    const duplicateCount = parsed.length - uniqueAddresses.length;
-    if (duplicateCount > 0) {
-      logger.info(`sanctions-oracle: deduplicating ${duplicateCount} duplicate addresses`);
-    }
-    addresses = parsed.map(normalizeStellarAddress);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error(
-      `sanctions-oracle: Failed to load addresses from ${args.addressesPath}: ${message}`,
-    );
-    process.exitCode = 1;
-    return;
-  }
-  if (args.reconcile && !args.denylistSnapshotPath) {
-    logger.error?.(
-      'sanctions-oracle: --reconcile requires --denylist-snapshot <path-to-json-array> listing the current denylist',
-    );
-    process.exitCode = 1;
-    return;
-  }
-
-  let currentDenylist: string[] | undefined;
-  if (args.denylistSnapshotPath) {
-    try {
-      const parsed = JSON.parse(fs.readFileSync(args.denylistSnapshotPath, 'utf8'));
-      if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === 'string')) {
-        throw new Error('Denylist snapshot must be a JSON array of strings');
-      }
-      currentDenylist = parsed;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error(
-        `sanctions-oracle: Failed to load denylist snapshot from ${args.denylistSnapshotPath}: ${message}`,
-      );
-      process.exitCode = 1;
-      return;
-    }
-  }
-
-  let provider: SanctionsProvider;
-  if (args.providerModulePath) {
-    try {
-      const imported = await import(args.providerModulePath);
-      provider = (imported.default ?? imported) as SanctionsProvider;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error(`Failed to load provider module ${args.providerModulePath}: ${message}`);
-      process.exitCode = 1;
-      return;
-    }
-  } else if (args.csvPath) {
-    provider = new CsvSanctionsProvider(args.csvPath);
-  } else {
-    provider = new MockSanctionsProvider();
-  }
-
-  if (args.rateLimit) {
-    provider = new RateLimitedSanctionsProvider(provider);
-  }
-
-  if (args.dryRun) {
-    // Fee estimation needs RPC details and the submitting account; it is
-    // skipped (no feeEstimate in the report) when they are not provided.
-    const dryRunSecret = process.env.SANCTIONS_ORACLE_SECRET_KEY ?? args.secretKey;
-    const dryRunFeeEstimator =
-      args.contractId && args.rpcUrl && args.networkPassphrase && dryRunSecret
-        ? createRpcFeeEstimator({
-            rpcUrl: args.rpcUrl,
-            networkPassphrase: args.networkPassphrase,
-            contractId: args.contractId,
-            sourcePublicKey: Keypair.fromSecret(dryRunSecret).publicKey(),
-          })
-        : undefined;
-    const result = await syncSanctionsToDenylist({
-      provider,
-      addresses,
-      writer: {
-        async addToDenylist(): Promise<{ hash: string }> {
-          throw new Error('addToDenylist should not be called in dry-run mode');
-        },
-      },
-      dryRun: true,
-      logger,
-      currentDenylist,
-      reconcile: args.reconcile,
-      ...(dryRunFeeEstimator ? { feeEstimator: dryRunFeeEstimator } : {}),
-    });
-    if (result.feeEstimate?.error) {
-      logger.error?.(`sanctions-oracle: ${result.feeEstimate.error}`);
-    } else if (result.feeEstimate) {
-      logger.info(
-        `sanctions-oracle: estimated fee for ${result.feeEstimate.pendingWrites} write(s): ${result.feeEstimate.totalFeeStroops} stroops (${result.feeEstimate.totalFeeXlm} XLM)`,
-      );
-    }
-    logger.info('sanctions-oracle: dry-run result', result);
-    // CLI-only: the machine-readable result is written to stdout so it can be
-    // piped/redirected independently of the human-readable logger stream.
-    // eslint-disable-next-line no-console
-    console.log(JSON.stringify(result, null, 2));
-    if (result.deadlineExceeded) process.exitCode = EXIT_CODE_DEADLINE_EXCEEDED;
-    return;
-  }
-
-  // Prefer the environment variable over --secret-key: CLI args are visible
-  // in shell history and process listings (e.g. `ps`), which the flag alone
-  // is vulnerable to.
-  const secretKey = process.env.SANCTIONS_ORACLE_SECRET_KEY ?? args.secretKey;
-
-  if (!args.contractId || !args.rpcUrl || !args.networkPassphrase || !secretKey) {
-    logger.error?.(
-      'sanctions-oracle: Missing required flags for a live sync. Required: --contract-id, --rpc-url, --network-passphrase, and SANCTIONS_ORACLE_SECRET_KEY (env, preferred) or --secret-key (or pass --dry-run).',
-    );
-    process.exitCode = 1;
-    return;
-  }
-
-  // Checkpoints only apply to live syncs; a dry run never marks addresses done.
-  const checkpoint = args.checkpointPath
-    ? new FileCheckpointStore(args.checkpointPath, logger)
-    : undefined;
-
-  const writer = createRpcDenylistWriter({
-    rpcUrl: args.rpcUrl,
-    networkPassphrase: args.networkPassphrase,
-    contractId: args.contractId,
-    sourceKeypair: Keypair.fromSecret(secretKey),
-    ...(process.env.SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY
-      ? { feeSource: Keypair.fromSecret(process.env.SANCTIONS_ORACLE_FEE_SOURCE_SECRET_KEY) }
-      : {}),
-    // Every delisting is recorded with the clearing provider's source.
-    ...(args.reconcile
-      ? {
-          auditLogger: (entry: AuditLogEntry) => logger.info('sanctions-oracle: audit', entry),
-          logger,
-        }
-      : {}),
-  });
-
-  const result = await syncSanctionsToDenylist({
-    provider,
-    addresses,
-    writer,
-    dryRun: false,
-    logger,
-    currentDenylist,
-    reconcile: args.reconcile,
-    checkpoint,
-    resume: Boolean(checkpoint),
-  });
-  // CLI-only: machine-readable result to stdout (see dry-run branch above).
-  // eslint-disable-next-line no-console
-  console.log(JSON.stringify(result, null, 2));
-  if (result.deadlineExceeded) process.exitCode = EXIT_CODE_DEADLINE_EXCEEDED;
-}
-
-if (require.main === module) {
-  runCli().catch((err) => {
-    // CLI-only: last-resort crash handler for the binary entrypoint; no logger
-    // is in scope here.
-    // eslint-disable-next-line no-console
-    console.error('sanctions-oracle:', err);
-    process.exitCode = 1;
-  });
-}
+ * Creates a {@link DenylistWriter} that submits `add_to_denylist` /
+ * `remove_from_denylist` calls to a Soroban contract over RPC.
+ *
+ * @example
+ * ```ts
+ * import { Keypair } from '@stellar/stellar-sdk';
+ * import { createRpcDenylistWriter } from 'sanctions-or

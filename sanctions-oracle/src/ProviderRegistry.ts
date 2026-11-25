@@ -53,6 +53,26 @@ export interface RegistryCheckResult {
   errors: ProviderErrorOutcome[];
 }
 
+/**
+ * Thrown by {@link ProviderRegistry.checkAddressDetailed} when every
+ * registered provider failed to answer.
+ *
+ * @example
+ * ```ts
+ * import { ProviderRegistry, ProviderRegistryAllProvidersFailedError } from 'sanctions-oracle';
+ *
+ * const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
+ * registry.register('broken', { checkAddress: async () => { throw new Error('down'); } });
+ *
+ * try {
+ *   await registry.checkAddress('GABC...');
+ * } catch (err) {
+ *   if (err instanceof ProviderRegistryAllProvidersFailedError) {
+ *     console.error(err.errors); // [{ name: 'broken', error: 'down' }]
+ *   }
+ * }
+ * ```
+ */
 export class ProviderRegistryAllProvidersFailedError extends Error {
   constructor(public readonly errors: ProviderErrorOutcome[]) {
     super(
@@ -81,6 +101,18 @@ const DEFAULT_PRIORITY = Number.POSITIVE_INFINITY;
  * `syncSanctionsToDenylist`'s `provider` option).
  *
  * See ../docs/provider-registry-design.md for the full design rationale.
+ *
+ * @example
+ * ```ts
+ * import { ProviderRegistry } from 'sanctions-oracle';
+ *
+ * const registry = new ProviderRegistry({ policy: 'any-flag-wins' });
+ * registry.register('list-a', providerA, { priority: 1 });
+ * registry.register('list-b', providerB, { priority: 2 });
+ *
+ * const result = await registry.checkAddress('GABC...');
+ * console.log(result.flagged, result.source);
+ * ```
  */
 export class ProviderRegistry implements SanctionsProvider {
   private readonly providers = new Map<string, RegisteredProvider>();
@@ -89,12 +121,31 @@ export class ProviderRegistry implements SanctionsProvider {
   private readonly tieBreak: TieBreak;
   private nextRegistrationIndex = 0;
 
+  /**
+   * @example
+   * ```ts
+   * const registry = new ProviderRegistry({
+   *   policy: 'majority-vote',
+   *   onProviderError: 'flag',
+   *   tieBreak: 'clear',
+   * });
+   * ```
+   */
   constructor(options: ProviderRegistryOptions) {
     this.policy = options.policy;
     this.onProviderError = options.onProviderError ?? 'ignore';
     this.tieBreak = options.tieBreak ?? 'flag';
   }
 
+  /**
+   * Registers a provider under a unique name.
+   *
+   * @example
+   * ```ts
+   * registry.register('list-a', providerA, { priority: 1 });
+   * registry.listProviders(); // ['list-a']
+   * ```
+   */
   register(name: string, provider: SanctionsProvider, options: RegisterOptions = {}): void {
     if (this.providers.has(name)) {
       throw new Error(`sanctions-oracle: a provider named "${name}" is already registered`);
@@ -107,14 +158,40 @@ export class ProviderRegistry implements SanctionsProvider {
     });
   }
 
+  /**
+   * Removes a previously registered provider. No-op if the name is unknown.
+   *
+   * @example
+   * ```ts
+   * registry.unregister('list-a');
+   * ```
+   */
   unregister(name: string): void {
     this.providers.delete(name);
   }
 
+  /**
+   * Returns the names of all currently registered providers.
+   *
+   * @example
+   * ```ts
+   * registry.register('list-a', providerA);
+   * registry.listProviders(); // ['list-a']
+   * ```
+   */
   listProviders(): string[] {
     return Array.from(this.providers.keys());
   }
 
+  /**
+   * Queries every registered provider and resolves the verdict per the
+   * configured policy. Implements {@link SanctionsProvider}.
+   *
+   * @example
+   * ```ts
+   * const { flagged, source } = await registry.checkAddress('GABC...');
+   * ```
+   */
   async checkAddress(address: string): Promise<CheckResult> {
     const result = await this.checkAddressDetailed(address);
     return {
@@ -124,6 +201,16 @@ export class ProviderRegistry implements SanctionsProvider {
     };
   }
 
+  /**
+   * Like {@link checkAddress}, but also returns per-provider outcomes and
+   * errors for auditing.
+   *
+   * @example
+   * ```ts
+   * const detail = await registry.checkAddressDetailed('GABC...');
+   * console.log(detail.policy, detail.results, detail.errors);
+   * ```
+   */
   async checkAddressDetailed(address: string): Promise<RegistryCheckResult> {
     if (this.providers.size === 0) {
       throw new Error('sanctions-oracle: ProviderRegistry has no registered providers');

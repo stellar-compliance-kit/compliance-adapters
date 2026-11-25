@@ -111,6 +111,26 @@ const defaultSleep = (ms: number, signal?: AbortSignal): Promise<void> =>
     );
   });
 
+/**
+ * Polls a Soroban RPC `EventSource` for contract events and dispatches each one
+ * to `onEvent`, with configurable retry, backoff, backfill, concurrency and
+ * observability.
+ *
+ * @example
+ * ```ts
+ * import { HorizonListener } from 'horizon-listener';
+ *
+ * const listener = new HorizonListener({
+ *   eventSource,
+ *   onEvent: async (event) => {
+ *     console.log('event', event.id, 'from', event.contractId);
+ *   },
+ *   pollIntervalMs: 5000,
+ * });
+ *
+ * await listener.start();
+ * ```
+ */
 export class HorizonListener {
   private readonly eventSource: EventSource;
   private readonly onEvent: (event: RawContractEvent) => Promise<void> | void;
@@ -169,6 +189,16 @@ export class HorizonListener {
    * Pass `{ signal }` to stop the listener via an AbortController; the returned
    * promise resolves once the loop has wound down. An already-aborted signal
    * makes this a no-op.
+   *
+   * @example
+   * ```ts
+   * const controller = new AbortController();
+   * const done = listener.start({ signal: controller.signal });
+   *
+   * // Later, to shut down gracefully:
+   * controller.abort();
+   * await done;
+   * ```
    */
   async start(options: StartOptions = {}): Promise<void> {
     const { signal } = options;
@@ -187,6 +217,14 @@ export class HorizonListener {
    * event (and only advances its cursor past a page) once the consumer pulls
    * the next item, so a slow consumer applies backpressure to polling.
    * Breaking out of the loop or aborting `signal` stops the listener.
+   *
+   * @example
+   * ```ts
+   * for await (const event of listener.events()) {
+   *   await handleEvent(event);
+   *   if (shouldStop) break; // stops the listener
+   * }
+   * ```
    */
   async *events(options: StartOptions = {}): AsyncGenerator<RawContractEvent, void, undefined> {
     const { signal } = options;
@@ -483,6 +521,14 @@ export class HorizonListener {
     }
   }
 
+  /**
+   * Stops the listener loop and cancels any in-flight backoff sleep.
+   *
+   * @example
+   * ```ts
+   * process.on('SIGTERM', () => listener.stop());
+   * ```
+   */
   stop(): void {
     this.running = false;
     this.sleepAbortController?.abort();
@@ -491,6 +537,14 @@ export class HorizonListener {
   /**
    * Returns a snapshot of the listener's current health/progress state, for
    * use in liveness/readiness probes or status dashboards.
+   *
+   * @example
+   * ```ts
+   * app.get('/health', (_req, res) => {
+   *   const status = listener.getStatus();
+   *   res.status(status.running ? 200 : 503).json(status);
+   * });
+   * ```
    */
   getStatus(): {
     running: boolean;

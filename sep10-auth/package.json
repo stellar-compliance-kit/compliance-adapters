@@ -4,6 +4,9 @@
   "private": true,
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "bin": {
+    "sep10-auth": "dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -26,7 +29,8 @@
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
     "test": "jest",
-    "bench": "ts-node bench/challenge-throughput.ts"
+    "bench": "ts-node bench/challenge-throughput.ts",
+    "cli": "ts-node src/cli.ts"
   },
   "dependencies": {
     "@stellar/stellar-sdk": "^16.0.1",

@@ -28,6 +28,21 @@ function resolveGroupName(metricName: string, groups: Map<string, MetricGroup>):
   return metricName;
 }
 
+/**
+ * Combines multiple Prometheus text exposition payloads into a single
+ * exposition, merging HELP/TYPE headers and sample lines per metric family.
+ *
+ * @example
+ * ```ts
+ * import { combineExpositions } from '@stellar-compliance-kit/shared';
+ *
+ * const merged = combineExpositions([
+ *   '# HELP requests_total Total requests\n# TYPE requests_total counter\nrequests_total 1\n',
+ *   '# HELP requests_total Total requests\nrequests_total 2\n',
+ * ]);
+ * // => '# HELP requests_total Total requests\n# TYPE requests_total counter\nrequests_total 1\nrequests_total 2\n'
+ * ```
+ */
 export function combineExpositions(expositions: string[]): string {
   if (expositions.length === 0) {
     return '';
