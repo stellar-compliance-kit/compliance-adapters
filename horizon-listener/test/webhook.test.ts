@@ -1,4 +1,7 @@
 import { createHmac } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import Ajv from 'ajv';
 import { HttpWebhookSender } from '../src/webhook';
 import type { RawContractEvent } from '../src/eventSource';
 
@@ -571,6 +574,79 @@ describe('HttpWebhookSender', () => {
       const [, init] = fetchImpl.mock.calls[0];
       const sentEvent = JSON.parse(init.body).event;
       expect(sentEvent.id).toBe('evt-metrics-trace-test');
+    });
+  });
+
+  describe('webhook payload contract (issue #1046)', () => {
+    const schemaDir = join(__dirname, '..', 'schemas');
+
+    function loadSchema(version: string): object {
+      return JSON.parse(readFileSync(join(schemaDir, `webhook-${version}.schema.json`), 'utf8'));
+    }
+
+    function makeValidator(version: string) {
+      const ajv = new Ajv({ allErrors: true, strict: false });
+      return ajv.compile(loadSchema(version));
+    }
+
+    async function captureBody(
+      sender: HttpWebhookSender,
+      event: RawContractEvent,
+    ): Promise<any> {
+      const fetchImpl = (sender as any).fetchImpl ?? (sender as any).options?.fetchImpl;
+      const calls = fetchImpl.mock.calls;
+      await sender.send(event);
+      const [, init] = calls[calls.length - 1];
+      return JSON.parse(init.body);
+    }
+
+    it('has a JSON Schema for every supported WEBHOOK_SCHEMA_VERSION', () => {
+      const versions = (HttpWebhookSender as any).SUPPORTED_SCHEMA_VERSIONS as string[];
+      expect(Array.isArray(versions)).toBe(true);
+      expect(versions.length).toBeGreaterThan(0);
+      for (const version of versions) {
+        expect(() => loadSchema(version)).not.toThrow();
+      }
+    });
+
+    it('validates a single-event payload against the schema', async () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      const sender = new HttpWebhookSender({ url: 'http://localhost:9999/webhook', fetchImpl });
+      const version = (HttpWebhookSender as any).WEBHOOK_SCHEMA_VERSION as string;
+      const validate = makeValidator(version);
+
+      const event = makeEvent();
+      await sender.send(event);
+
+      const [, init] = fetchImpl.mock.calls[0];
+      const body = JSON.parse(init.body);
+      expect(validate(body)).toBe(true);
+      expect(validate.errors).toBeNull();
+    });
+
+    it('validates a batched payload against the schema', async () => {
+      const fetchImpl = jest.fn().mockResolvedValue({ ok: true, status: 200 });
+      const sender = new HttpWebhookSender({ url: 'http://localhost:9999/webhook', fetchImpl });
+      const version = (HttpWebhookSender as any).WEBHOOK_SCHEMA_VERSION as string;
+      const validate = makeValidator(version);
+
+      const events = [
+        makeEvent({ id: 'evt-1' }),
+        makeEvent({ id: 'evt-2', ledger: 101 }),
+        makeEvent({ id: 'evt-3', topic: ['denylist_removed'] }),
+      ];
+      await sender.sendBatch(events);
+
+      const [, init] = fetchImpl.mock.calls[0];
+      const body = JSON.parse(init.body);
+      expect(validate(body)).toBe(true);
+      expect(validate.errors).toBeNull();
+    });
+
+    it('rejects a payload missing required fields', () => {
+      const version = (HttpWebhookSender as any).WEBHOOK_SCHEMA_VERSION as string;
+      const validate = makeValidator(version);
+      expect(validate({})).toBe(false);
     });
   });
 
