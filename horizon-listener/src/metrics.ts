@@ -15,7 +15,9 @@
  *
  * Gauges
  * ──────
- * ledger_lag  — latest ledger reported by RPC minus the last processed ledger
+ * listener_lag_ledgers — latest ledger reported by RPC minus the last processed
+ *                        ledger (stable name, independent of the prefix)
+ * <prefix>_ledger_lag  — deprecated alias of `listener_lag_ledgers`
  */
 
 import {
@@ -35,6 +37,13 @@ export type { Counter, Gauge, Histogram, Outcome };
 export type Phase = 'rpc_poll' | 'event_relay' | 'webhook' | 'rpc_failover';
 
 const PHASES: Phase[] = ['rpc_poll', 'event_relay', 'webhook', 'rpc_failover'];
+
+/**
+ * Canonical name of the lag gauge: how many ledgers the listener is behind the
+ * chain head. Kept unprefixed so operator alerting rules written against the
+ * documented name keep working regardless of `prefix`.
+ */
+export const LISTENER_LAG_LEDGERS_METRIC = 'listener_lag_ledgers';
 
 export type MetricsRegistryOptions = Omit<
   GenericMetricsRegistryOptions<Phase>,
@@ -61,7 +70,7 @@ export class MetricsRegistry extends GenericMetricsRegistry<Phase> {
     this.gaugePrefix = prefix;
   }
 
-  /** Sets the `<prefix>_ledger_lag` gauge (latest ledger − processed ledger). */
+  /** Sets the lag gauges (latest ledger − processed ledger). */
   setLedgerLag(lag: number): void {
     this.ledgerLag = lag;
   }
@@ -71,11 +80,14 @@ export class MetricsRegistry extends GenericMetricsRegistry<Phase> {
   }
 
   override expose(): string {
-    const name = `${this.gaugePrefix}_ledger_lag`;
+    const legacyName = `${this.gaugePrefix}_ledger_lag`;
+    const name = LISTENER_LAG_LEDGERS_METRIC;
     return (
       super.expose() +
-      `# HELP ${name} Latest ledger minus last processed ledger\n` +
-      `# TYPE ${name} gauge\n${name} ${this.ledgerLag}\n`
+      `# HELP ${name} Number of ledgers the listener is behind the chain head\n` +
+      `# TYPE ${name} gauge\n${name} ${this.ledgerLag}\n` +
+      `# HELP ${legacyName} Deprecated alias of ${name}\n` +
+      `# TYPE ${legacyName} gauge\n${legacyName} ${this.ledgerLag}\n`
     );
   }
 }

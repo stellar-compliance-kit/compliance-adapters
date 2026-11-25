@@ -1,4 +1,9 @@
-import { MetricsRegistry, NoopMetricsRegistry, DEFAULT_HISTOGRAM_BUCKETS } from '../src/metrics';
+import {
+  MetricsRegistry,
+  NoopMetricsRegistry,
+  DEFAULT_HISTOGRAM_BUCKETS,
+  LISTENER_LAG_LEDGERS_METRIC,
+} from '../src/metrics';
 import { HorizonListener } from '../src/listener';
 import { HttpWebhookSender } from '../src/webhook';
 import type { EventSource, RawContractEvent } from '../src/eventSource';
@@ -115,6 +120,81 @@ describe('MetricsRegistry', () => {
     for (let i = 1; i < DEFAULT_HISTOGRAM_BUCKETS.length; i++) {
       expect(DEFAULT_HISTOGRAM_BUCKETS[i]).toBeGreaterThan(DEFAULT_HISTOGRAM_BUCKETS[i - 1]);
     }
+  });
+});
+
+// ── listener_lag_ledgers gauge ────────────────────────────────────────────────
+
+describe('listener_lag_ledgers gauge', () => {
+  it('is exported as a constant and starts at zero', () => {
+    const reg = new MetricsRegistry();
+    expect(LISTENER_LAG_LEDGERS_METRIC).toBe('listener_lag_ledgers');
+    expect(reg.getLedgerLag()).toBe(0);
+
+    const output = reg.expose();
+    expect(output).toContain('# HELP listener_lag_ledgers');
+    expect(output).toContain('# TYPE listener_lag_ledgers gauge');
+    expect(output).toContain('listener_lag_ledgers 0');
+  });
+
+  it('reports the value passed to setLedgerLag', () => {
+    const reg = new MetricsRegistry();
+    reg.setLedgerLag(42);
+
+    expect(reg.getLedgerLag()).toBe(42);
+    expect(reg.expose()).toContain('listener_lag_ledgers 42');
+  });
+
+  it('keeps the fixed name when a custom prefix is used', () => {
+    const reg = new MetricsRegistry({ prefix: 'my_service' });
+    reg.setLedgerLag(7);
+
+    const output = reg.expose();
+    expect(output).toContain('listener_lag_ledgers 7');
+    expect(output).toContain('my_service_requests_total');
+  });
+
+  it('still exposes the deprecated prefixed alias', () => {
+    const reg = new MetricsRegistry({ prefix: 'my_service' });
+    reg.setLedgerLag(3);
+
+    const output = reg.expose();
+    expect(output).toContain('# TYPE my_service_ledger_lag gauge');
+    expect(output).toContain('my_service_ledger_lag 3');
+  });
+
+  it('tracks the lag across listener poll cycles', async () => {
+    const event = makeEvent({ id: 'evt-lag', ledger: 100 });
+    const getEvents = jest
+      .fn()
+      .mockResolvedValueOnce({ events: [event], nextCursor: 'c1', latestLedger: 105 })
+      .mockResolvedValueOnce({ events: [], nextCursor: 'c2', latestLedger: 106 });
+
+    const metrics = new MetricsRegistry();
+    let polls = 0;
+    const listener = new HorizonListener({
+      eventSource: { getEvents },
+      onEvent: jest.fn(),
+      sleep: async () => {
+        polls += 1;
+        if (polls >= 2) listener.stop();
+      },
+      metrics,
+    });
+
+    await listener.start();
+
+    // First poll processed ledger 100 with the head at 105, then caught up at 106.
+    expect(getEvents).toHaveBeenCalledTimes(2);
+    expect(metrics.getLedgerLag()).toBe(0);
+    expect(metrics.expose()).toContain('listener_lag_ledgers 0');
+  });
+
+  it('is a no-op on NoopMetricsRegistry', () => {
+    const noop = new NoopMetricsRegistry();
+    expect(() => noop.setLedgerLag(99)).not.toThrow();
+    expect(noop.getLedgerLag()).toBe(0);
+    expect(noop.expose()).toBe('');
   });
 });
 
@@ -249,9 +329,7 @@ describe('HorizonListener metrics integration', () => {
   });
 
   it('works correctly when no metrics registry is provided (no-op default)', async () => {
-    const getEvents = jest
-      .fn()
-      .mockResolvedValueOnce({ events: [], nextCursor: 'c1' });
+    const getEvents = jest.fn().mockResolvedValueOnce({ events: [], nextCursor: 'c1' });
 
     const eventSource: EventSource = { getEvents };
     const listener = new HorizonListener({

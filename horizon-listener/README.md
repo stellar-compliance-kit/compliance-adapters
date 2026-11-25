@@ -455,9 +455,56 @@ The exported metric names are prefixed with the value from `prefix` (default:
 - `${prefix}_duration_ms_bucket{phase="...",le="..."}`
 - `${prefix}_duration_ms_sum{phase="..."}`
 - `${prefix}_duration_ms_count{phase="..."}`
-- `${prefix}_ledger_lag` — gauge: `latestLedger` from the latest `getEvents`
+- `listener_lag_ledgers` — gauge: `latestLedger` from the latest `getEvents`
   response minus the ledger of the last processed event (0 when caught up).
   Updated on every successful poll; the main SLO signal for pipeline freshness.
+  The name is unprefixed so alerting rules can reference it regardless of
+  `prefix`; it is also exported as the `LISTENER_LAG_LEDGERS_METRIC` constant.
+- `${prefix}_ledger_lag` — deprecated alias of `listener_lag_ledgers`, kept for
+  backwards compatibility. Prefer `listener_lag_ledgers` in new dashboards and
+  alerts.
+
+### Alerting example
+
+A stale listener keeps serving old state while reporting itself healthy, so
+alert on the lag gauge rather than on process uptime. A ready-to-adapt
+Prometheus rule:
+
+```yaml
+# prometheus/rules/horizon-listener.yml
+groups:
+  - name: horizon-listener
+    rules:
+      - alert: HorizonListenerLagging
+        # One ledger is roughly 5 seconds on Stellar mainnet, so 60 ledgers is
+        # about 5 minutes behind the chain head.
+        expr: listener_lag_ledgers > 60
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Horizon listener is {{ $value }} ledgers behind the chain head
+          description: >-
+            The listener has not caught up for 5 minutes. Check the Soroban RPC
+            endpoint, the onEvent handler latency, and the listener logs before
+            restarting it.
+
+      - alert: HorizonListenerStalled
+        expr: listener_lag_ledgers > 600
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: Horizon listener is severely behind ({{ $value }} ledgers)
+          description: >-
+            Compliance events are no longer processed in a timely manner. Escalate
+            and verify that the cursor is not stuck and that `rpc_poll` failures
+            are not exhausting `maxRetries`.
+```
+
+Scrape the registry from your `/metrics` endpoint and keep the rules next to
+your other service alerts; the gauge is 0 immediately after startup until the
+first successful poll reports a head ledger.
 
 ### Scraping example
 

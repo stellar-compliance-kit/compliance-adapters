@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sync runs.
 - **horizon-listener** — HMAC webhook request signing, stream/poll event source modes, and
   metrics/tracing instrumentation around event polling and webhook delivery.
+- **horizon-listener** — `listener_lag_ledgers` gauge reporting how far behind the chain head
+  the listener is, with Prometheus alerting examples in the package README.
 - **backoff** — shared `@compliance-adapters/backoff` package extracting the exponential-backoff
   formula previously duplicated across `horizon-listener` and `sanctions-oracle`.
 - End-to-end test suite (`e2e-tests`) exercising the packages against a live Soroban RPC/Horizon

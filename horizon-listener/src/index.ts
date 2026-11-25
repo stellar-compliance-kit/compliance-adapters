@@ -43,6 +43,7 @@ export {
   MetricsRegistry,
   NoopMetricsRegistry,
   DEFAULT_HISTOGRAM_BUCKETS,
+  LISTENER_LAG_LEDGERS_METRIC,
   type Phase,
   type AnyMetricsRegistry,
   type Counter,
